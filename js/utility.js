@@ -615,30 +615,44 @@ const Utility = (function () {
     return null;
   }
 
-  function libraryButtonInputs(pick) {
-    const buttons =
+  function libraryPickButtons(pick) {
+    return (
       pick?.buttons ||
       pick?.components?.find((c) => String(c.type || '').toUpperCase() === 'BUTTONS')?.buttons ||
-      [];
-    if (!buttons.length) return null;
-    return JSON.stringify(
-      buttons.map((btn) => {
-        const type = String(btn.type || '').toUpperCase();
-        if (type === 'URL' || type === 'WEB_URL') {
-          return {
-            type: 'URL',
-            url: {
-              base_url: 'https://www.example.com/{{1}}',
-              url_suffix_example: 'https://www.example.com/support',
-            },
-          };
-        }
-        if (type === 'PHONE_NUMBER') {
-          return { type: 'PHONE_NUMBER', phone_number: '+10000000000' };
-        }
-        return { type: 'QUICK_REPLY', text: 'OK' };
-      })
+      []
     );
+  }
+
+  /** Meta library_template_button_inputs — URL/phone need values; QUICK_REPLY is type-only (no text). */
+  function libraryButtonInputFor(btn) {
+    const type = String(btn.type || '').toUpperCase();
+    if (type === 'URL' || type === 'WEB_URL') {
+      return {
+        type: 'URL',
+        url: {
+          base_url: 'https://www.example.com/{{1}}',
+          url_suffix_example: 'https://www.example.com/support',
+        },
+      };
+    }
+    if (type === 'PHONE_NUMBER') {
+      return { type: 'PHONE_NUMBER', phone_number: '+10000000000' };
+    }
+    if (type === 'POSTBACK') {
+      return { type: 'POSTBACK' };
+    }
+    return { type: 'QUICK_REPLY' };
+  }
+
+  function libraryButtonInputs(pick) {
+    const buttons = libraryPickButtons(pick);
+    if (!buttons.length) return null;
+    const supported = buttons.filter((btn) => {
+      const type = String(btn.type || '').toUpperCase();
+      return type !== 'FORMS' && type !== 'FLOW';
+    });
+    if (!supported.length) return null;
+    return supported.map(libraryButtonInputFor);
   }
 
   function buildLibraryClonePayload(cloneName, pick, { includeButtons = true } = {}) {
@@ -718,7 +732,7 @@ const Utility = (function () {
     const body = libraryPickBody(pick);
     if (!isCloneableLibraryPick(pick)) return -1;
     const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
-    const btnCount = (pick?.buttons || []).length;
+    const btnCount = libraryPickButtons(pick).length;
     let score = 220 - staticLen - btnCount * 18;
     if (/^good news!/i.test(body)) score += 55;
     if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 45;
