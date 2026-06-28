@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deletion Request Status — Wayfair</title>
+  <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body class="legal-page">
+  <header class="landing-header">
+    <a href="/index.html" class="brand">← Wayfair</a>
+  </header>
+  <main class="legal-content">
+    <h1>Data deletion request status</h1>
+    <div id="status-box">
+      <p>Loading status…</p>
+    </div>
+    <p><a href="/data-deletion.html">← Back to data deletion instructions</a></p>
+  </main>
+  <script>
+    (function () {
+      var code = new URLSearchParams(location.search).get('code');
+      var box = document.getElementById('status-box');
+      if (!code) {
+        box.innerHTML = '<p class="status-error">No confirmation code provided.</p>';
+        return;
+      }
+      fetch('/api/deletion-status/' + encodeURIComponent(code))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) {
+            box.innerHTML = '<p class="status-error">' + data.error + '</p>';
+            return;
+          }
+          box.innerHTML =
+            '<p><strong>Status:</strong> ' + data.status + '</p>' +
+            '<p><strong>Confirmation code:</strong> <code>' + data.confirmation_code + '</code></p>' +
+            '<p><strong>Requested:</strong> ' + new Date(data.requested_at).toLocaleString() + '</p>' +
+            '<p>' + data.message + '</p>' +
+            '<p>Questions? Email <strong>alirunyonali@gmail.com</strong></p>';
+        })
+        .catch(function () {
+          box.innerHTML = '<p class="status-error">Could not load status. Try again later.</p>';
+        });
+    })();
+  </script>
+</body>
+</html>

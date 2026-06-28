@@ -1,0 +1,12 @@
+{
+  "name": "pagechat-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PageChat Hub — Facebook Page Messenger Manager",
+  "scripts": {
+    "start": "cd server && npm install && node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

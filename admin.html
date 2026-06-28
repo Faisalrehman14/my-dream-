@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin — Wayfair</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body class="admin-body">
+
+  <div id="admin-gate" class="admin-gate">
+    <div class="admin-gate-card admin-gate-card--premium">
+      <div class="admin-gate-logo" aria-hidden="true">W</div>
+      <div class="admin-badge">Wayfair · Admin</div>
+      <h1>Meta Command Center</h1>
+      <p>App Review, webhooks, permissions &amp; submission readiness — one secure dashboard for administrators.</p>
+
+      <div id="admin-key-step">
+        <label for="admin-key">Access key</label>
+        <input type="password" id="admin-key" placeholder="Enter admin access key" autocomplete="off" />
+        <button type="button" id="btn-admin-unlock" class="btn-primary btn-block">Unlock dashboard</button>
+        <p class="admin-key-hint" id="admin-key-hint">Set <code>ADMIN_ACCESS_KEY</code> in Railway environment variables.</p>
+      </div>
+
+      <div id="admin-login-step" class="hidden">
+        <button type="button" id="btn-admin-login" class="btn-fb-large">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#fff" d="M24 12.07C24 5.41 18.63 0 12 0S0 5.41 0 12.07C0 18.05 4.39 23.1 10.13 24v-8.41H7.08v-3.49h3.05V9.41c0-3.01 1.79-4.67 4.54-4.67 1.32 0 2.7.24 2.7.24v2.97h-1.52c-1.5 0-1.97.93-1.97 1.88v2.26h3.35l-.54 3.49h-2.81V24C19.61 23.1 24 18.05 24 12.07z"/></svg>
+          Sign in with Facebook
+        </button>
+        <p class="login-note" id="admin-login-status">Connect your admin Facebook account.</p>
+        <p class="login-help hidden" id="admin-login-help"></p>
+      </div>
+
+      <p class="login-footer-note"><a href="index.html">← Home</a> · <a href="portal.html">User portal</a></p>
+    </div>
+  </div>
+
+  <div id="admin-shell" class="app-shell admin-shell hidden">
+    <aside class="sidebar admin-sidebar">
+      <div class="sidebar-brand admin-sidebar-brand">
+        <span class="admin-brand-mark" aria-hidden="true">W</span>
+        <div>
+          <span class="admin-brand-name" id="admin-brand-title">Wayfair</span>
+          <span class="admin-brand-sub">Meta Admin</span>
+        </div>
+      </div>
+
+      <div class="page-picker admin-page-picker">
+        <label for="admin-page-select">Test Page</label>
+        <div class="page-picker-row">
+          <div class="avatar-slot avatar-slot--page" id="admin-page-avatar-slot">
+            <img id="admin-page-avatar" class="page-avatar hidden" alt="" width="36" height="36" />
+            <span class="avatar-fallback" id="admin-page-avatar-fallback">P</span>
+          </div>
+          <select id="admin-page-select"></select>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button type="button" class="nav-item active" data-view="overview">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          Dashboard
+        </button>
+        <button type="button" class="nav-item" data-view="setup">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+          Meta Setup
+        </button>
+        <button type="button" class="nav-item" data-view="review">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>
+          App Review
+        </button>
+        <button type="button" class="nav-item" data-view="testing">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z"/></svg>
+          API Testing
+        </button>
+        <button type="button" class="nav-item" data-view="data">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>
+          Data Handling
+        </button>
+        <button type="button" class="nav-item" data-view="webhooks">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          Webhooks
+        </button>
+        <button type="button" class="nav-item" data-view="urls">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+          URLs &amp; Docs
+        </button>
+      </nav>
+
+      <div class="sidebar-user">
+        <img id="admin-avatar" alt="" />
+        <div class="sidebar-user-info">
+          <div id="admin-name" class="user-name"></div>
+          <button type="button" id="btn-admin-logout" class="btn-text">Sign out</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="topbar admin-topbar">
+        <div class="topbar-title" id="admin-topbar-title">Dashboard</div>
+        <div class="topbar-actions">
+          <span class="admin-app-id-pill hidden" id="admin-app-id-pill"></span>
+          <a href="https://developers.facebook.com/apps/" target="_blank" rel="noopener" class="btn-outline-sm">Meta Developers ↗</a>
+          <a href="portal.html" class="btn-outline-sm" target="_blank">User portal ↗</a>
+        </div>
+      </header>
+
+      <main class="app-main admin-main">
+        <!-- DASHBOARD -->
+        <section class="view active" id="view-overview">
+          <div class="admin-view-body">
+            <div class="admin-hero">
+              <div class="admin-hero__text">
+                <h1 id="admin-hero-title">Wayfair · Submission Readiness</h1>
+                <p>Track permissions, webhooks, and Meta App Review progress in real time.</p>
+              </div>
+              <div class="admin-hero__score">
+                <span class="readiness-label">Ready to submit</span>
+                <div id="readiness-score" class="readiness-score bad">0%</div>
+              </div>
+            </div>
+
+            <div class="admin-status-grid" id="admin-status-grid">
+              <div class="admin-status-card" id="status-health"><span class="admin-status-dot"></span><strong>Server</strong><span>Checking…</span></div>
+              <div class="admin-status-card" id="status-https"><span class="admin-status-dot ok"></span><strong>HTTPS</strong><span id="status-https-val">—</span></div>
+              <div class="admin-status-card" id="status-appid"><span class="admin-status-dot"></span><strong>App ID</strong><span id="status-appid-val">—</span></div>
+              <div class="admin-status-card" id="status-secret"><span class="admin-status-dot"></span><strong>App Secret</strong><span id="status-secret-val">—</span></div>
+              <div class="admin-status-card" id="status-compliance"><span class="admin-status-dot"></span><strong>Compliance</strong><span id="status-compliance-val">—</span></div>
+              <div class="admin-status-card" id="status-webhook"><span class="admin-status-dot"></span><strong>Webhook</strong><span id="status-webhook-val">—</span></div>
+            </div>
+
+            <div class="admin-quick-actions">
+              <button type="button" class="admin-action-card" id="qa-screencast">
+                <span class="admin-action-icon">🎬</span>
+                <strong>Screencast mode</strong>
+                <span>Record for Meta upload</span>
+              </button>
+              <button type="button" class="admin-action-card" id="qa-walkthrough">
+                <span class="admin-action-icon">📋</span>
+                <strong>Permission walkthrough</strong>
+                <span>6-step guided demo</span>
+              </button>
+              <button type="button" class="admin-action-card" id="qa-meta-setup">
+                <span class="admin-action-icon">⚙</span>
+                <strong>Meta Basic Settings</strong>
+                <span>Copy-paste values</span>
+              </button>
+              <button type="button" class="admin-action-card" id="qa-data-handling">
+                <span class="admin-action-icon">🔒</span>
+                <strong>Data handling</strong>
+                <span>Meta privacy questionnaire</span>
+              </button>
+              <button type="button" class="admin-action-card" id="qa-run-tests">
+                <span class="admin-action-icon">🧪</span>
+                <strong>Run API tests</strong>
+                <span>Verify permissions</span>
+              </button>
+            </div>
+
+            <div id="submit-verdict" class="submit-verdict not-ready admin-verdict">
+              <strong>Not ready</strong><p>Fix blockers below before submitting to Meta.</p>
+            </div>
+
+            <h3 class="subsection-title">Blockers</h3>
+            <ul class="blocker-list" id="readiness-blockers"></ul>
+
+            <h3 class="subsection-title">Permissions progress</h3>
+            <div class="admin-perm-grid" id="admin-perm-grid"></div>
+
+            <div class="test-creds-box">
+              <h3 class="subsection-title">Test credentials for Meta reviewers</h3>
+              <p class="meta-muted">Also editable in <strong>App Review</strong> tab — saved in your browser.</p>
+              <div class="creds-row"><label for="test-email">Test email</label><input type="email" id="test-email" placeholder="reviewer@example.com" /></div>
+              <div class="creds-row"><label for="test-password">Test password</label><input type="password" id="test-password" placeholder="Password for reviewer" /></div>
+              <div class="creds-row"><label for="test-page-name">Test Page name</label><input type="text" id="test-page-name" placeholder="e.g. MKMG GR" /></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- META SETUP -->
+        <section class="view" id="view-setup">
+          <div class="admin-view-body">
+            <header class="admin-section-header">
+              <h1>Meta Basic Settings</h1>
+              <button type="button" id="btn-copy-meta-basic-all" class="btn-primary">Copy all fields</button>
+            </header>
+            <p class="meta-muted">Paste these into <strong>Meta Developers → Your App → Settings → Basic</strong>, then Save.</p>
+            <div class="meta-copy-grid" id="meta-basic-fields"></div>
+
+            <h3 class="subsection-title" style="margin-top:32px">Deauthorize &amp; Data Deletion (Meta Basic — bottom of page)</h3>
+            <p class="meta-muted">Yeh do fields screenshot wale hain. <strong>Static page nahi</strong> — server callback URLs use karo taake Meta ping accept ho.</p>
+            <div class="meta-copy-grid" id="meta-compliance-fields"></div>
+
+            <h3 class="subsection-title" style="margin-top:32px">Facebook Login → Settings</h3>
+            <div class="oauth-setup-box">
+              <p class="meta-muted"><strong>Valid OAuth Redirect URIs</strong> (add all three):</p>
+              <pre class="code-block" id="oauth-redirect-uris"></pre>
+              <button type="button" id="btn-copy-oauth" class="btn-outline-sm">Copy redirect URIs</button>
+              <p class="meta-muted" style="margin-top:14px"><strong>Allowed Domains for JavaScript SDK:</strong></p>
+              <pre class="code-block" id="oauth-allowed-domain"></pre>
+            </div>
+
+            <h3 class="subsection-title">Webhook permissions required</h3>
+            <div class="webhook-perm-table">
+              <table class="admin-table">
+                <thead><tr><th>Permission</th><th>Purpose</th><th>Where</th></tr></thead>
+                <tbody>
+                  <tr><td><code>pages_manage_metadata</code></td><td>Subscribe Page to webhooks</td><td>Settings → Subscribe</td></tr>
+                  <tr><td><code>pages_messaging</code></td><td>Read &amp; reply to messages</td><td>Inbox</td></tr>
+                  <tr><td><code>pages_show_list</code></td><td>List managed Pages</td><td>Page dropdown</td></tr>
+                  <tr><td><code>public_profile</code></td><td>User name &amp; photo</td><td>Sidebar</td></tr>
+                </tbody>
+              </table>
+            </div>
+            <p class="meta-muted">Messenger → Webhooks → subscribe fields: <code>messages</code>, <code>messaging_postbacks</code>, <code>message_echoes</code></p>
+          </div>
+        </section>
+
+        <!-- APP REVIEW -->
+        <section class="view" id="view-review">
+          <div class="admin-view-body">
+            <header class="admin-section-header">
+              <h1>App Review Submission</h1>
+              <div class="admin-header-actions">
+                <a href="portal.html?review=1&view=engagement&guide=1" target="_blank" rel="noopener" class="btn-primary">Open screencast mode ↗</a>
+                <button type="button" id="btn-start-review-guide" class="btn-outline-sm">Start walkthrough</button>
+              </div>
+            </header>
+
+            <div id="meta-submission-root"></div>
+
+            <div class="settings-block screencast-box">
+              <h3>🎬 Screencast checklist</h3>
+              <ol class="setup-steps">
+                <li>Open screencast mode → log in → <strong>Allow all</strong> permissions</li>
+                <li>Show: profile, Page dropdown, Inbox reply, Engagement, Notifications, Webhooks</li>
+                <li>Upload 2–4 min video in Meta → App Review → Advanced Access</li>
+              </ol>
+            </div>
+
+            <button type="button" id="btn-meta-done" class="btn-primary" style="margin-bottom:12px">Mark Meta setup complete</button>
+            <div class="meta-chk-grid">
+              <label><input type="checkbox" id="meta-chk-privacy" /> Privacy Policy URL in Meta Basic</label>
+              <label><input type="checkbox" id="meta-chk-terms" /> Terms of Service URL in Meta Basic</label>
+              <label><input type="checkbox" id="meta-chk-deletion" /> User data deletion URL in Meta Basic</label>
+              <label><input type="checkbox" id="meta-chk-deauth" /> Deauthorize callback URL set</label>
+              <label><input type="checkbox" id="meta-chk-deletion-cb" /> Data deletion callback URL set</label>
+              <label><input type="checkbox" id="meta-chk-oauth" /> OAuth redirect URIs added</label>
+              <label><input type="checkbox" id="meta-chk-tester" /> Test user added in App Roles</label>
+              <label><input type="checkbox" id="meta-chk-inbox" /> Test user messaged Page on Messenger</label>
+              <label><input type="checkbox" id="meta-chk-screencast" /> Screencast recorded (6 permissions)</label>
+            </div>
+
+            <h3 class="subsection-title">Video script</h3>
+            <pre class="code-block review-script" id="video-script"></pre>
+            <div class="review-actions-row">
+              <button type="button" id="btn-copy-script" class="btn-outline-sm">Copy script</button>
+              <button type="button" id="btn-copy-recording-url" class="btn-outline-sm">Copy screencast URL</button>
+            </div>
+
+            <h3 class="subsection-title">Permission answers (Meta form)</h3>
+            <div id="permission-answers"></div>
+          </div>
+        </section>
+
+        <!-- TESTING -->
+        <section class="view" id="view-testing">
+          <div class="admin-view-body">
+            <header class="admin-section-header"><h1>Meta API Testing</h1></header>
+            <div class="meta-test-run-box">
+              <p>Run while logged in. Refresh Meta → App Review → Testing after 5–30 minutes.</p>
+              <button type="button" id="btn-run-meta-tests" class="btn-primary">Run all API tests</button>
+              <button type="button" id="btn-test-pages-list" class="btn-outline-sm">Test pages_show_list only</button>
+              <div id="granted-scopes-panel" class="scopes-panel hidden"></div>
+              <div id="meta-test-log" class="meta-test-log"></div>
+            </div>
+          </div>
+        </section>
+
+        <!-- DATA HANDLING -->
+        <section class="view" id="view-data">
+          <div class="admin-view-body">
+            <header class="admin-section-header">
+              <h1>Data Handling (Meta App Review)</h1>
+            </header>
+            <div id="data-handling-root"></div>
+          </div>
+        </section>
+
+        <!-- WEBHOOKS -->
+        <section class="view" id="view-webhooks">
+          <div class="admin-view-body">
+            <header class="admin-section-header"><h1>Webhook Configuration</h1></header>
+            <div class="settings-block admin-webhook-panel">
+              <h3>Page webhook connection</h3>
+              <div id="webhook-status"></div>
+              <div id="webhook-actions" class="webhook-actions"></div>
+              <div class="webhook-meta-grid">
+                <div><span class="meta-muted">Callback URL</span><pre class="code-block" id="webhook-url-display">Loading…</pre></div>
+                <div><span class="meta-muted">Verify token</span><pre class="code-block">Railway → VERIFY_TOKEN</pre></div>
+              </div>
+              <ol class="setup-steps">
+                <li>Meta → Messenger → Webhooks → Callback: <code id="webhook-callback"></code></li>
+                <li>Subscribe: <code>messages</code>, <code>messaging_postbacks</code>, <code>message_echoes</code></li>
+                <li>Click <strong>Subscribe Page to webhooks</strong> below</li>
+              </ol>
+            </div>
+          </div>
+        </section>
+
+        <!-- URLS -->
+        <section class="view" id="view-urls">
+          <div class="admin-view-body">
+            <header class="admin-section-header">
+              <h1>URLs &amp; Documentation</h1>
+              <button type="button" id="btn-copy-all-urls" class="btn-outline-sm">Copy all URLs</button>
+            </header>
+            <ul class="url-list" id="meta-urls"></ul>
+            <h3 class="subsection-title">Test instructions for Meta reviewers</h3>
+            <textarea id="review-notes" readonly rows="12"></textarea>
+            <button type="button" id="btn-copy-notes" class="btn-outline-sm">Copy test instructions</button>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/js/env.js"></script>
+  <script>
+    (function () {
+      var v = (window.__PAGECHAT__ && window.__PAGECHAT__.build) || Date.now();
+      ['config.js','api.js','auth.js','utility.js','page-meta.js','review.js','readiness.js','meta-tests.js','data-handling.js','admin-app.js'].forEach(function (f) {
+        document.write('<script src="js/' + f + '?v=' + encodeURIComponent(v) + '"><\/script>');
+      });
+    })();
+  </script>
+</body>
+</html>

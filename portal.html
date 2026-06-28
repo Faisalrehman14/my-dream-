@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html lang="en" class="portal-boot">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dashboard — Wayfair</title>
+  <meta name="description" content="Manage Facebook Page Messenger, engagement, and customer notifications from your Wayfair dashboard." />
+  <style>
+    /* Prevent unstyled flash before main CSS loads */
+    html.portal-boot .hidden,
+    html.portal-boot #app-shell { display: none !important; }
+    html.portal-boot body { background: #f0f2f5; }
+  </style>
+  <link rel="preload" href="css/style.css" as="style" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body class="portal-body">
+
+  <!-- Login -->
+  <div id="login-screen" class="portal-login portal-login--premium">
+    <div class="portal-login-layout">
+      <aside class="portal-login-hero" aria-hidden="true">
+        <div class="portal-login-hero-inner">
+          <div class="portal-brand-mark" id="login-brand-mark">W</div>
+          <h2 id="login-hero-title">Wayfair</h2>
+          <p id="login-hero-tagline">Facebook Page Messenger Manager</p>
+          <ul class="portal-login-features">
+            <li>
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor"><path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm-1 15l-5-5 1.41-1.41L9 12.17l7.59-7.59L18 6l-9 9z"/></svg>
+              Unified Messenger inbox with live updates
+            </li>
+            <li>
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor"><path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm-1 15l-5-5 1.41-1.41L9 12.17l7.59-7.59L18 6l-9 9z"/></svg>
+              Reply to customers from one dashboard
+            </li>
+            <li>
+              <svg viewBox="0 0 20 20" width="18" height="18" fill="currentColor"><path d="M10 0C4.48 0 0 4.48 0 10s4.48 10 10 10 10-4.48 10-10S15.52 0 10 0zm-1 15l-5-5 1.41-1.41L9 12.17l7.59-7.59L18 6l-9 9z"/></svg>
+              Post analytics &amp; order notifications
+            </li>
+          </ul>
+        </div>
+      </aside>
+      <div class="portal-login-card portal-login-card--premium">
+        <a href="index.html" class="portal-login-back">← Back to home</a>
+        <div class="portal-brand-mark portal-brand-mark--sm" id="login-card-mark">W</div>
+        <h1>Welcome back</h1>
+        <p>Sign in with the Facebook account that manages your business Page.</p>
+        <button type="button" id="btn-login" class="btn-fb-large">
+          <svg viewBox="0 0 24 24" width="22" height="22"><path fill="#fff" d="M24 12.07C24 5.41 18.63 0 12 0S0 5.41 0 12.07C0 18.05 4.39 23.1 10.13 24v-8.41H7.08v-3.49h3.05V9.41c0-3.01 1.79-4.67 4.54-4.67 1.32 0 2.7.24 2.7.24v2.97h-1.52c-1.5 0-1.97.93-1.97 1.88v2.26h3.35l-.54 3.49h-2.81V24C19.61 23.1 24 18.05 24 12.07z"/></svg>
+          <span id="btn-login-label">Continue with Facebook</span>
+        </button>
+        <p class="login-note" id="login-status">Click to connect your account.</p>
+        <p class="login-help hidden" id="login-help"></p>
+        <p class="login-legal-note">By continuing, you agree to our <a href="terms.html" target="_blank">Terms</a> and <a href="privacy.html" target="_blank">Privacy Policy</a>.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- App shell -->
+  <div id="app-shell" class="app-shell hidden" hidden aria-hidden="true">
+    <aside class="sidebar portal-sidebar" id="sidebar">
+      <div class="portal-sidebar-brand">
+        <div class="portal-brand-mark" id="sidebar-brand-mark">W</div>
+        <div>
+          <span class="portal-brand-name" id="sidebar-brand-name">Wayfair</span>
+          <span class="portal-brand-sub">Page Manager</span>
+        </div>
+      </div>
+
+      <div class="page-picker portal-page-picker">
+        <label for="page-select">Active Page</label>
+        <div class="page-picker-row">
+          <div class="avatar-slot avatar-slot--page" id="page-avatar-slot" aria-hidden="true">
+            <img id="page-avatar" class="page-avatar hidden" alt="" width="36" height="36" />
+            <span class="avatar-fallback" id="page-avatar-fallback">WF</span>
+          </div>
+          <select id="page-select"></select>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav" aria-label="Main navigation">
+        <button type="button" class="nav-item active" data-view="dashboard">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+          Dashboard
+        </button>
+        <button type="button" class="nav-item" data-view="inbox">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          Inbox
+          <span class="badge-count hidden" id="unread-badge">0</span>
+        </button>
+        <button type="button" class="nav-item" data-view="engagement">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+          Engagement
+        </button>
+        <button type="button" class="nav-item" data-view="utility">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+          Notifications
+        </button>
+        <button type="button" class="nav-item" data-view="settings">
+          <svg class="nav-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          Settings
+        </button>
+      </nav>
+
+      <div class="sidebar-user portal-sidebar-user">
+        <img id="sidebar-avatar" alt="" />
+        <div class="sidebar-user-info">
+          <div id="sidebar-name" class="user-name"></div>
+          <button type="button" id="btn-logout" class="btn-text">Sign out</button>
+        </div>
+      </div>
+    </aside>
+
+    <div class="app-content">
+      <header class="topbar portal-topbar">
+        <button type="button" class="topbar-menu" id="sidebar-toggle" aria-label="Toggle menu">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+        <div class="portal-topbar-titles">
+          <div class="topbar-title" id="topbar-title">Dashboard</div>
+          <div class="portal-topbar-sub" id="topbar-subtitle"></div>
+        </div>
+        <div class="portal-topbar-actions">
+          <span class="portal-sync-pill hidden" id="sync-pill">Synced</span>
+          <a href="index.html" class="topbar-link">Home</a>
+        </div>
+      </header>
+
+      <main class="app-main">
+        <!-- Dashboard -->
+        <section class="view active" id="view-dashboard">
+          <div class="view-body">
+            <div class="portal-dash-hero">
+              <div class="dash-welcome-row">
+                <div class="avatar-slot avatar-slot--dash" id="dash-page-avatar-slot">
+                  <img id="dash-page-avatar" class="dash-page-avatar hidden" alt="" width="56" height="56" />
+                  <span class="avatar-fallback avatar-fallback--dash" id="dash-page-avatar-fallback">WF</span>
+                </div>
+                <div class="portal-dash-hero-text">
+                  <h2 id="dash-greeting">Good morning</h2>
+                  <p id="dash-page-label">Select a Page to get started.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="dash-stats portal-dash-stats" id="dash-stats">
+              <div class="dash-stat-card portal-stat-card">
+                <div class="portal-stat-icon portal-stat-icon--blue">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                </div>
+                <div>
+                  <span class="dash-stat-val" id="dash-conversations">—</span>
+                  <span class="dash-stat-label">Conversations</span>
+                </div>
+              </div>
+              <div class="dash-stat-card portal-stat-card">
+                <div class="portal-stat-icon portal-stat-icon--orange">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+                </div>
+                <div>
+                  <span class="dash-stat-val" id="dash-unread">—</span>
+                  <span class="dash-stat-label">Unread</span>
+                </div>
+              </div>
+              <div class="dash-stat-card portal-stat-card">
+                <div class="portal-stat-icon portal-stat-icon--green">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+                </div>
+                <div>
+                  <span class="dash-stat-val" id="dash-posts">—</span>
+                  <span class="dash-stat-label">Recent posts</span>
+                </div>
+              </div>
+              <div class="dash-stat-card portal-stat-card">
+                <div class="portal-stat-icon portal-stat-icon--purple">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+                </div>
+                <div>
+                  <span class="dash-stat-val" id="dash-engagement">—</span>
+                  <span class="dash-stat-label">Total engagement</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="portal-dash-grid">
+              <div class="portal-dash-col">
+                <h3 class="portal-section-title">Quick actions</h3>
+                <div class="dash-actions portal-dash-actions">
+                  <button type="button" class="dash-action-card portal-action-card" data-go="inbox">
+                    <div class="portal-action-icon portal-action-icon--blue">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                    </div>
+                    <div>
+                      <strong>Open Inbox</strong>
+                      <span>Reply to customer messages</span>
+                    </div>
+                  </button>
+                  <button type="button" class="dash-action-card portal-action-card" data-go="engagement">
+                    <div class="portal-action-icon portal-action-icon--green">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+                    </div>
+                    <div>
+                      <strong>View Analytics</strong>
+                      <span>Check post performance</span>
+                    </div>
+                  </button>
+                  <button type="button" class="dash-action-card portal-action-card" data-go="utility">
+                    <div class="portal-action-icon portal-action-icon--purple">
+                      <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+                    </div>
+                    <div>
+                      <strong>Send Notification</strong>
+                      <span>Order &amp; shipping updates</span>
+                    </div>
+                  </button>
+                </div>
+              </div>
+              <div class="portal-dash-col">
+                <div class="portal-section-head">
+                  <h3 class="portal-section-title">Recent conversations</h3>
+                  <button type="button" class="btn-text-sm" data-go="inbox" id="dash-view-all-inbox">View all</button>
+                </div>
+                <div class="portal-recent-list" id="dash-recent-convs">
+                  <p class="portal-empty-hint">Conversations will appear here once your Page is loaded.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Inbox -->
+        <section class="view" id="view-inbox">
+          <header class="view-header portal-view-header">
+            <div>
+              <h1>Inbox</h1>
+              <p class="view-header-desc">Read and reply to Messenger conversations for your active Page.</p>
+            </div>
+            <div class="view-header-actions">
+              <span class="inbox-live-indicator hidden" id="inbox-live-indicator" title="Updates every few seconds">
+                <span class="live-dot"></span> Live
+              </span>
+              <button type="button" id="btn-refresh-inbox" class="btn-outline-sm">Refresh</button>
+            </div>
+          </header>
+          <div class="inbox-layout">
+            <div class="conv-list" id="conv-list">
+              <p class="empty-state">Select a Page to load conversations.</p>
+            </div>
+            <div class="chat-panel">
+              <div class="chat-header hidden" id="chat-header">
+                <div class="avatar-slot avatar-slot--chat" id="chat-avatar-slot">
+                  <img id="chat-avatar" class="chat-avatar-img hidden" alt="" />
+                  <span class="avatar-fallback avatar-fallback--chat" id="chat-avatar-fallback">?</span>
+                </div>
+                <div class="chat-header-info">
+                  <strong id="chat-name">Customer</strong>
+                  <span id="chat-psid" class="muted">Messenger conversation</span>
+                </div>
+              </div>
+              <div class="messages" id="messages"></div>
+              <form class="composer hidden" id="composer-form">
+                <input type="text" id="reply-input" placeholder="Type a reply…" autocomplete="off" />
+                <button type="submit" class="btn-send">Send</button>
+              </form>
+              <p class="empty-state chat-empty" id="chat-empty">Select a conversation to view messages.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Engagement -->
+        <section class="view" id="view-engagement">
+          <header class="view-header portal-view-header">
+            <div>
+              <h1>Engagement</h1>
+              <p class="view-header-desc">Track likes, comments, and shares on your recent Page posts.</p>
+            </div>
+            <button type="button" id="btn-refresh-posts" class="btn-outline-sm">Refresh</button>
+          </header>
+          <div class="engagement-content">
+            <div class="stats-row" id="engagement-stats"></div>
+            <div class="posts-feed" id="posts-feed"></div>
+          </div>
+        </section>
+
+        <!-- Notifications -->
+        <section class="view" id="view-utility">
+          <header class="view-header portal-view-header">
+            <div>
+              <h1>Customer Notifications</h1>
+              <p class="view-header-desc">Send transactional utility notifications using Meta-approved templates. Only customers who have already messaged your Page can receive these.</p>
+            </div>
+          </header>
+          <div class="utility-content portal-utility-content">
+            <form class="utility-form portal-utility-form" id="utility-form">
+              <div class="portal-form-row">
+                <div class="portal-form-field">
+                  <label for="utility-recipient">Customer</label>
+                  <select id="utility-recipient">
+                    <option value="">— Select customer —</option>
+                  </select>
+                </div>
+                <div class="portal-form-field">
+                  <label for="utility-tag">Notification type</label>
+                  <select id="utility-tag">
+                    <option value="POST_PURCHASE_UPDATE">Order / shipping update</option>
+                    <option value="CONFIRMED_EVENT_UPDATE">Appointment / event confirmation</option>
+                    <option value="ACCOUNT_UPDATE">Account notification</option>
+                  </select>
+                </div>
+              </div>
+              <div class="portal-form-field">
+                <label for="utility-body">Message details</label>
+                <textarea id="utility-body" rows="4" placeholder="scheduled to arrive on 10 May"></textarea>
+                <p class="form-hint">Enter the update detail only — it is inserted into the sentence. Example for shipping: <em>scheduled to arrive on 10 May</em></p>
+              </div>
+              <button type="submit" class="btn-primary">Send notification</button>
+            </form>
+            <div id="utility-status" class="status-msg hidden"></div>
+          </div>
+        </section>
+
+        <!-- Settings -->
+        <section class="view" id="view-settings">
+          <header class="view-header portal-view-header">
+            <div>
+              <h1>Settings</h1>
+              <p class="view-header-desc">Manage webhooks, permissions, and legal information for your Page.</p>
+            </div>
+          </header>
+          <div class="settings-content portal-settings-content">
+            <div class="portal-settings-grid">
+              <div class="settings-block portal-settings-card">
+                <div class="portal-settings-card-head">
+                  <div class="portal-settings-icon portal-settings-icon--blue">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+                  </div>
+                  <div>
+                    <h3>Real-time message updates</h3>
+                    <p>Connect webhooks so new customer messages appear instantly in your inbox.</p>
+                  </div>
+                </div>
+                <div id="webhook-status"></div>
+                <div id="webhook-actions" class="webhook-actions"></div>
+              </div>
+              <div class="settings-block portal-settings-card">
+                <div class="portal-settings-card-head">
+                  <div class="portal-settings-icon portal-settings-icon--gray">
+                    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                  </div>
+                  <div>
+                    <h3>Account &amp; legal</h3>
+                    <p>Review how we handle your data and manage app permissions.</p>
+                  </div>
+                </div>
+                <ul class="settings-links portal-settings-links">
+                  <li><a href="privacy.html" target="_blank">Privacy Policy</a></li>
+                  <li><a href="terms.html" target="_blank">Terms of Service</a></li>
+                  <li><a href="data-deletion.html" target="_blank">Data Deletion</a></li>
+                  <li><a href="deauth.html" target="_blank">Deauthorize App</a></li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div id="toast" class="toast portal-toast hidden"></div>
+
+  <script src="/js/env.js"></script>
+  <script>
+    (function () {
+      var v = (window.__PAGECHAT__ && window.__PAGECHAT__.build) || Date.now();
+      var params = new URLSearchParams(location.search);
+      var review = params.get('review') === '1' || params.get('meta_review') === '1';
+      var files = [
+        'config.js',
+        'api.js',
+        'auth.js',
+        'inbox.js',
+        'engagement.js',
+        'utility.js',
+        'page-meta.js',
+      ];
+      if (review) files.push('review.js');
+      files.push('portal.js');
+      files.forEach(function (file) {
+        document.write('<script src="js/' + file + '?v=' + encodeURIComponent(v) + '"><\/script>');
+      });
+    })();
+  </script>
+</body>
+</html>
