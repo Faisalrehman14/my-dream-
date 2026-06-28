@@ -444,6 +444,10 @@ const Inbox = (function () {
   async function load(page, onCustomerList) {
     activePageId = page.id;
     pollPage = page;
+    if (allCanReplyPageId !== page.id) {
+      allCanReply = [];
+      allCanReplyPageId = null;
+    }
     onSelectCallback = (conv, psid) => selectConversation(page, conv, psid);
 
     showLoading();
@@ -569,14 +573,14 @@ const Inbox = (function () {
     const list = [];
     convs.forEach((c) => {
       if (!isCanReplyConversation(c)) return;
-      const selectedItemId = GraphAPI.extractInboxSelectedItemId(c, pageId);
-      if (!selectedItemId || seen.has(selectedItemId)) return;
-      seen.add(selectedItemId);
       const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
+      const psid = cust?.id ? String(cust.id) : GraphAPI.extractInboxSelectedItemId(c, pageId);
+      if (!psid || seen.has(psid)) return;
+      seen.add(psid);
       list.push({
-        psid: cust?.id || selectedItemId,
-        selectedItemId,
-        name: cust?.name || cust?.email || selectedItemId,
+        psid,
+        selectedItemId: psid,
+        name: cust?.name || cust?.email || psid,
       });
     });
     return list;
@@ -603,7 +607,7 @@ const Inbox = (function () {
 
   async function downloadReplyableIdsFile(page, onProgress) {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
-    const recipients = await loadAllReplyableRecipients(page, onProgress);
+    const recipients = await loadAllReplyableRecipients(page, onProgress, { force: true });
     if (!recipients.length) {
       throw new Error(
         'No can-reply customers found. Meta inbox mein jahan reply blocked/done/spam ho, woh list mein nahi aate.'
@@ -621,26 +625,30 @@ const Inbox = (function () {
   }
 
   function getReplyableCount(pageId) {
-    if (allCanReplyPageId === pageId && allCanReply.length) {
+    if (allCanReplyPageId === pageId) {
       return allCanReply.length;
     }
-    return collectReplyableRecipients(conversations, pageId || activePageId).length;
+    return 0;
   }
 
   function getSubscriberCount(pageId) {
-    return getReplyableCount(pageId);
+    if (allSubscribersPageId === pageId && allSubscribers.length) {
+      return allSubscribers.length;
+    }
+    return collectUtilityRecipients(conversations, pageId || activePageId).length;
   }
 
   async function downloadSubscriberIdsFile(page, onProgress) {
     return downloadReplyableIdsFile(page, onProgress);
   }
 
-  async function loadAllReplyableRecipients(page, onProgress) {
+  async function loadAllReplyableRecipients(page, onProgress, options = {}) {
+    const force = options.force === true;
     if (!page?.id || !page?.access_token) return [];
     if (loadingAllCanReply && allCanReplyPageId === page.id) {
       return allCanReply.slice();
     }
-    if (allCanReplyPageId === page.id && allCanReply.length) {
+    if (!force && allCanReplyPageId === page.id && allCanReply.length) {
       return allCanReply.slice();
     }
     loadingAllCanReply = true;

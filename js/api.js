@@ -344,18 +344,24 @@ const GraphAPI = (function () {
     return fetchConversationPages(pageId, pageToken, [pageId, 'conversations'], onProgress);
   }
 
-  /** Inbox folder only — excludes Done / Spam; include Meta can_reply flag */
+  /** Inbox folder only — Messenger threads with Meta can_reply flag */
   async function getAllCanReplyConversations(pageId, pageToken, onProgress) {
-    return fetchConversationPages(pageId, pageToken, [pageId, 'conversations', 'inbox'], onProgress);
+    return fetchConversationPages(
+      pageId,
+      pageToken,
+      [pageId, 'conversations', 'inbox'],
+      onProgress,
+      { platform: 'MESSENGER' }
+    );
   }
 
-  async function fetchConversationPages(pageId, pageToken, pathSegments, onProgress) {
+  async function fetchConversationPages(pageId, pageToken, pathSegments, onProgress, extraQuery = {}) {
     const all = [];
     let after = null;
     const limit = 100;
 
     while (true) {
-      const query = { fields: CONVERSATION_LIST_FIELDS, limit };
+      const query = { fields: CONVERSATION_LIST_FIELDS, limit, ...extraQuery };
       if (after) query.after = after;
       const res = await pageGet(pageToken, pathSegments, query);
       const batch = res.data || [];
@@ -802,17 +808,16 @@ const GraphAPI = (function () {
     return customer || parts[0] || null;
   }
 
-  /** Business Suite inbox URL uses selected_item_id (from Meta link, else customer PSID). */
+  /** Business Suite selected_item_id for FB_MESSAGE equals the customer PSID (not legacy threadid in link). */
   function extractInboxSelectedItemId(conv, pageId) {
-    const link = String(conv?.link || '').trim();
-    if (link) {
-      const qMatch = link.match(/[?&](?:selected_item_id|threadid)=([^&]+)/i);
-      if (qMatch?.[1]) return decodeURIComponent(qMatch[1]);
-      const pathMatch = link.match(/\/inbox\/(\d+)/i);
-      if (pathMatch?.[1]) return pathMatch[1];
-    }
     const cust = extractCustomerFromConversation(conv, pageId);
-    return cust?.id ? String(cust.id) : null;
+    const psid = cust?.id ? String(cust.id) : null;
+    if (psid) return psid;
+
+    const link = String(conv?.link || '').trim();
+    if (!link) return null;
+    const selMatch = link.match(/[?&]selected_item_id=([^&]+)/i);
+    return selMatch?.[1] ? decodeURIComponent(selMatch[1]) : null;
   }
 
   // Legacy wrappers for page-meta.js (path string style)
