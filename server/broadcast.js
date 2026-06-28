@@ -46,12 +46,22 @@ function publicJob(job) {
   };
 }
 
+function isAllowedUtilityTemplateName(name) {
+  const n = String(name || '').toLowerCase();
+  if (!n.startsWith('pagechat_') || !n.includes('_custom_') || n.includes('_lib_')) return false;
+  const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
+  return !blocked.some((part) => n.includes(part));
+}
+
 function validateStartPayload(body) {
   if (!body?.pageId || !body?.pageToken || !body?.detail?.trim()) {
     return 'pageId, pageToken, and detail are required';
   }
   if (!body.directOnly && !body?.templateName) {
     return 'templateName is required unless directOnly is true';
+  }
+  if (!body.directOnly && !isAllowedUtilityTemplateName(body.templateName)) {
+    return 'Only pagechat custom templates are allowed (library/order templates blocked)';
   }
   if (!Array.isArray(body.recipients) || !body.recipients.length) {
     return 'At least one recipient is required';
@@ -116,29 +126,12 @@ async function sendDirect(job, recipient) {
   return data;
 }
 
-async function sendUtilityPlain(job, recipient) {
-  const url =
-    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
-    `?access_token=${encodeURIComponent(job.pageToken)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: JSON_UTF8,
-    body: utf8JsonBody({
-      recipient: { id: recipient.psid },
-      messaging_type: 'UTILITY',
-      message: { text: job.detail },
-    }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    const err = new Error(data.error.message || 'Send failed');
-    err.code = data.error.code;
-    throw err;
-  }
-  return data;
-}
-
 async function sendUtility(job, recipient) {
+  if (!isAllowedUtilityTemplateName(job.templateName)) {
+    throw new Error(
+      'Blocked library/order template on server. Open Notifications, wait for custom template setup, then start a new bulk send.'
+    );
+  }
   const langs = templateLanguageVariants(job.language);
   let lastErr = null;
   for (const code of langs) {
@@ -219,14 +212,14 @@ async function sendOne(job, recipient) {
   } catch (err) {
     if (err.code === 4) throw err;
     if (!isMessagingWindowError(err)) throw err;
-    try {
-      return await sendUtilityPlain(job, recipient);
-    } catch (plainErr) {
-      if (plainErr.code === 4) throw plainErr;
-    }
     if (!job.templateName) {
       throw new Error(
         'No utility template on this Page. Open Notifications while logged in, wait for template setup, then retry bulk send.'
+      );
+    }
+    if (!isAllowedUtilityTemplateName(job.templateName)) {
+      throw new Error(
+        'Blocked library/order template. Open Notifications, wait for custom template, then start a new bulk send.'
       );
     }
     return sendUtility(job, recipient);

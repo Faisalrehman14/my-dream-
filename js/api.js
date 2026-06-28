@@ -415,7 +415,7 @@ const GraphAPI = (function () {
     return result;
   }
 
-  /** Plain UTF-8 utility text — preserves emoji better than template {{1}} on some Pages. */
+  /** Do not use — Meta may silently apply the Page order template and add wrappers. */
   async function sendUtilityPlainText(pageId, pageToken, recipientPsid, text) {
     return pagePost(pageToken, [pageId, 'messages'], null, {
       recipient: { id: recipientPsid },

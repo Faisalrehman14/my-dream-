@@ -1,7 +1,7 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v15';
+  const TEMPLATE_VERSION = 'v16';
 
   /** User text replaces {{1}} — first option is exact message only (best for emoji). */
   const TEMPLATE_BODIES = [
@@ -110,10 +110,33 @@ const Utility = (function () {
     return blocked.some((phrase) => b.includes(phrase));
   }
 
+  function isAllowedTemplateName(name) {
+    const n = String(name || '').toLowerCase();
+    if (!n.startsWith('pagechat_') || !n.includes('_custom_') || n.includes('_lib_')) return false;
+    const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
+    return !blocked.some((part) => n.includes(part));
+  }
+
+  function isExactMessageBody(body) {
+    return String(body || '').trim() === '{{1}}';
+  }
+
+  function assertSafeTemplate(tpl) {
+    const name = tpl?.name || '';
+    const body = tpl?.body || '';
+    if (!isAllowedTemplateName(name)) {
+      throw new Error('Blocked Meta library template. Wait 1–2 min on Notifications for custom setup.');
+    }
+    if (hasUnwantedWrapper(body)) {
+      throw new Error('Blocked order/account wrapper template. Wait 1–2 min on Notifications tab.');
+    }
+  }
+
   function isOwnedSendableTemplate(tpl) {
     const body = tpl?.body || templateBodyFromApi(tpl) || '';
     const name = String(tpl?.name || '');
     if (!isOwnedCustomTemplate(name)) return false;
+    if (!isAllowedTemplateName(name)) return false;
     if (hasUnwantedWrapper(body)) return false;
     return true;
   }
@@ -558,11 +581,57 @@ const Utility = (function () {
       );
   }
 
+  async function resolveExactCustomTemplate(pageId, pageToken) {
+    const live = await listLiveSendableTemplates(pageId, pageToken);
+    const exact = live.filter((t) => isExactMessageBody(templateBodyFromApi(t)));
+    if (exact.length) {
+      const verified = await finalizeTemplateRecord(pageId, pageToken, exact[0].name);
+      if (verified) {
+        assertSafeTemplate(verified);
+        return verified;
+      }
+    }
+
+    clearTemplateCache(pageId);
+    const def = getTemplateDef(0);
+    const names = [
+      ownedTemplateName(pageId, 0),
+      `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36).slice(-5)}`,
+    ];
+    let lastError = null;
+    for (const name of names) {
+      try {
+        const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+        if (created) {
+          assertSafeTemplate(created);
+          if (isExactMessageBody(created.body)) return created;
+        }
+      } catch (err) {
+        lastError = err;
+        if (err.code === 4 || err.rateLimited) throw err;
+      }
+    }
+
+    const fallback = live.find((t) => isAllowedTemplateName(t.name));
+    if (fallback) {
+      const verified = await finalizeTemplateRecord(pageId, pageToken, fallback.name);
+      if (verified) {
+        assertSafeTemplate(verified);
+        return verified;
+      }
+    }
+
+    throw new Error(
+      (lastError?.message ||
+        'Could not prepare exact-message template. Open Notifications, wait 1–2 min, then retry.') +
+        (lastError?.message?.includes('pages_utility_messaging')
+          ? ' Sign out and sign in again — allow all permissions.'
+          : '')
+    );
+  }
+
   async function getVerifiedUtilityTemplate(page, categoryKey) {
-    const live = await listLiveSendableTemplates(page.id, page.access_token);
-    if (live.length) return normalizeFromApi(live[0]);
-    clearTemplateCache(page.id);
-    return ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+    return resolveExactCustomTemplate(page.id, page.access_token);
   }
 
   async function getUtilityTemplate(page, categoryKey) {
@@ -606,6 +675,7 @@ const Utility = (function () {
       throw err;
     }
     const norm = normalizeFromApi(rawTemplate);
+    assertSafeTemplate(norm);
     const detail = normalizeOutgoingText(msg);
     const langs = uniqueLanguageCodes(rawTemplate.language);
     let lastErr = null;
@@ -631,20 +701,25 @@ const Utility = (function () {
     const detail = normalizeOutgoingText(msg);
     let lastErr = null;
 
-    try {
-      const result = await GraphAPI.sendUtilityPlainText(page.id, page.access_token, psid, detail);
-      rememberPreview(page.id, psid, detail);
-      return result;
-    } catch (err) {
-      lastErr = err;
-      if (isRateLimitError(err)) throw err;
-    }
-
     for (let round = 0; round < 2; round++) {
-      const candidates = await listLiveSendableTemplates(page.id, page.access_token);
+      let candidates = await listLiveSendableTemplates(page.id, page.access_token);
+      candidates = candidates.filter(
+        (t) => isAllowedTemplateName(t.name) && !hasUnwantedWrapper(templateBodyFromApi(t))
+      );
+      candidates.sort((a, b) => {
+        const exactB = isExactMessageBody(templateBodyFromApi(b)) ? 1 : 0;
+        const exactA = isExactMessageBody(templateBodyFromApi(a)) ? 1 : 0;
+        if (exactB !== exactA) return exactB - exactA;
+        return (
+          templatePreferScore(b.name, templateBodyFromApi(b)) -
+          templatePreferScore(a.name, templateBodyFromApi(a))
+        );
+      });
+
       for (const raw of candidates) {
         try {
           const { result, tpl } = await trySendUtilityTemplate(page, psid, detail, raw);
+          assertSafeTemplate(tpl);
           templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
           readyTemplates.set(categoryKey || 'custom', tpl);
           rememberPreview(page.id, psid, detail);
@@ -659,7 +734,7 @@ const Utility = (function () {
 
       if (round === 0) {
         try {
-          await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+          await resolveExactCustomTemplate(page.id, page.access_token);
         } catch (err) {
           lastErr = err;
           if (isRateLimitError(err)) throw err;
@@ -808,6 +883,10 @@ const Utility = (function () {
       throw new Error('Utility template not ready yet. Wait 1–2 minutes and try again.');
     }
     const verified = normalizeFromApi(fresh);
+    assertSafeTemplate(verified);
+    if (!isAllowedTemplateName(verified.name)) {
+      throw new Error('Wrong template type detected. Open Notifications and wait for setup, then retry.');
+    }
     options.onProgress?.({
       current: 0,
       total: recipients.length,
