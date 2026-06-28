@@ -58,6 +58,17 @@ const Utility = (function () {
         META_TERMS_HINT
       );
     }
+    if (
+      err?.subcode === 2018416 ||
+      msg.includes('message template creation failed') ||
+      msg.includes('creating message template')
+    ) {
+      return (
+        'Meta ne is Page par custom template create reject kar diya. ' +
+        'App ab Meta ki official library template use karegi — 1 min wait karke dubara Send karein. ' +
+        META_TERMS_HINT
+      );
+    }
     return raw || 'Could not send notification.';
   }
 
@@ -123,6 +134,17 @@ const Utility = (function () {
 
   function isRateLimitError(err) {
     return err?.code === 4 || err?.rateLimited === true;
+  }
+
+  /** Meta generic template create failure — custom templates often blocked per Page. */
+  function isTemplateCreationFailedError(err) {
+    if (err?.subcode === 2018416 || err?.templateCreationFailed) return true;
+    const msg = String(err?.message || '').toLowerCase();
+    return (
+      msg.includes('message template creation failed') ||
+      msg.includes('creating message template') ||
+      msg.includes('an error occurred while creating message template')
+    );
   }
 
   function rethrowIfRateLimited(err, pageId) {
@@ -517,11 +539,12 @@ const Utility = (function () {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function ownedPayload(name, def, language = 'en_US') {
+  function ownedPayload(name, def, language = 'en') {
     return {
       name,
       language,
       category: 'UTILITY',
+      parameter_format: 'POSITIONAL',
       components: [
         {
           type: 'BODY',
@@ -692,7 +715,7 @@ const Utility = (function () {
     if (existing?.status === 'REJECTED') return null;
 
     let lastErr = null;
-    for (const lang of ['en_US']) {
+    for (const lang of ['en']) {
       try {
         const createRes = await GraphAPI.createPageUtilityTemplate(
           pageId,
@@ -715,6 +738,7 @@ const Utility = (function () {
       } catch (err) {
         lastErr = err;
         rethrowIfRateLimited(err, pageId);
+        if (isTemplateCreationFailedError(err)) return null;
       }
     }
     return null;
@@ -728,25 +752,35 @@ const Utility = (function () {
     );
   }
 
-  /** Meta library_template_button_inputs — URL/phone need values; QUICK_REPLY is type-only (no text). */
+  /** Meta library clone inputs — match Graph API shape (URL needs text + base_url). */
   function libraryButtonInputFor(btn) {
     const type = String(btn.type || '').toUpperCase();
     if (type === 'URL' || type === 'WEB_URL') {
       return {
         type: 'URL',
+        text: String(btn.text || btn.title || 'View').slice(0, 40),
         url: {
-          base_url: 'https://www.example.com/{{1}}',
-          url_suffix_example: 'https://www.example.com/support',
+          base_url: 'https://www.example.com/',
         },
       };
     }
     if (type === 'PHONE_NUMBER') {
-      return { type: 'PHONE_NUMBER', phone_number: '+10000000000' };
+      return {
+        type: 'PHONE_NUMBER',
+        text: String(btn.text || btn.title || 'Call').slice(0, 40),
+        phone_number: '+10000000000',
+      };
     }
     if (type === 'POSTBACK') {
       return { type: 'POSTBACK' };
     }
     return { type: 'QUICK_REPLY' };
+  }
+
+  function libraryBodyInputs(pick) {
+    const body = libraryPickBody(pick);
+    if (!body || !pick?.body_params?.length) return null;
+    return [{ type: 'body', text: body }];
   }
 
   function libraryButtonInputs(pick) {
@@ -764,9 +798,11 @@ const Utility = (function () {
     const payload = {
       name: cloneName,
       category: 'UTILITY',
-      language: parseTemplateLanguage(pick.language || 'en_US'),
+      language: parseTemplateLanguage(pick.language || 'en'),
       library_template_name: pick.name,
     };
+    const bodyInputs = libraryBodyInputs(pick);
+    if (bodyInputs) payload.library_template_body_inputs = bodyInputs;
     if (includeButtons) {
       const btnInputs = libraryButtonInputs(pick);
       if (btnInputs) payload.library_template_button_inputs = btnInputs;
@@ -837,7 +873,7 @@ const Utility = (function () {
     if (!isCloneableLibraryPick(pick)) return -1;
     const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
     const btnCount = libraryPickButtons(pick).length;
-    let score = 220 - staticLen - btnCount * 18;
+    let score = 220 - staticLen - btnCount * 35;
     if (/^good news!/i.test(body)) score += 55;
     if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 45;
     if (body === '({{1}})' || body.startsWith('Message:') || body.startsWith('Update:')) score += 25;
@@ -891,7 +927,12 @@ const Utility = (function () {
         lastError = err;
         rethrowIfRateLimited(err, pageId);
         const msg = String(err?.message || '').toLowerCase();
-        if (!includeButtons && msg.includes('button')) continue;
+        if (
+          !includeButtons &&
+          (msg.includes('button') || msg.includes('body') || isTemplateCreationFailedError(err))
+        ) {
+          continue;
+        }
         break;
       }
       break;
@@ -1115,30 +1156,6 @@ const Utility = (function () {
     clearTemplateCache(pageId);
     let lastError = null;
 
-    for (let i = 0; i < TEMPLATE_BODIES.length; i++) {
-      const def = getTemplateDef(i);
-      const names =
-        i === 0
-          ? [
-              ownedTemplateName(pageId, i),
-              `${ownedTemplateName(pageId, i)}_${Date.now().toString(36).slice(-5)}`,
-            ]
-          : [ownedTemplateName(pageId, i)];
-      for (const name of names) {
-        try {
-          const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-          if (created && isUsableTemplateBody(created.body)) {
-            assertSafeTemplate(created);
-            saveCachedTemplateRecord(pageId, created);
-            return created;
-          }
-        } catch (err) {
-          lastError = err;
-          rethrowIfRateLimited(err, pageId);
-        }
-      }
-    }
-
     try {
       const libraryTpl = await tryMinimalLibraryClone(pageId, pageToken);
       if (libraryTpl) {
@@ -1149,6 +1166,22 @@ const Utility = (function () {
     } catch (err) {
       lastError = err;
       rethrowIfRateLimited(err, pageId);
+    }
+
+    for (const i of [0, 1]) {
+      const def = getTemplateDef(i);
+      const name = ownedTemplateName(pageId, i);
+      try {
+        const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+        if (created && isUsableTemplateBody(created.body)) {
+          assertSafeTemplate(created);
+          saveCachedTemplateRecord(pageId, created);
+          return created;
+        }
+      } catch (err) {
+        lastError = err;
+        rethrowIfRateLimited(err, pageId);
+      }
     }
 
     throw new Error(

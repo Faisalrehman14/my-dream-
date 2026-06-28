@@ -102,6 +102,10 @@ const GraphAPI = (function () {
     err.code = e.code;
     err.subcode = e.error_subcode;
     err.fbtrace_id = e.fbtrace_id;
+    err.errorUserTitle = e.error_user_title || '';
+    if (e.error_subcode === 2018416 || String(e.error_user_title || '').includes('Template Creation Failed')) {
+      err.templateCreationFailed = true;
+    }
     if (e.code === 4) err.rateLimited = true;
     if (e.error_subcode === 2069032) {
       err.pageTokenRequired = true;
