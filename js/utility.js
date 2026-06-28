@@ -1,29 +1,31 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v5';
+  const TEMPLATE_VERSION = 'v6';
 
   /** Page-owned Messenger utility templates (auto-approved by Meta). */
   const OWNED_TEMPLATES = {
     POST_PURCHASE_UPDATE: {
-      prefix: 'Good news! Your order is now',
-      suffix: '. Thank you for your order.',
+      prefix: 'Your order update:',
+      suffix: ' Thank you for your order.',
       example: 'scheduled to arrive on 10 May',
       detailPlaceholder: 'scheduled to arrive on 10 May',
     },
     CONFIRMED_EVENT_UPDATE: {
-      prefix: 'Reminder: your appointment is',
-      suffix: '.',
-      example: 'confirmed for 10 May at 2:00 PM',
-      detailPlaceholder: 'confirmed for 10 May at 2:00 PM',
+      prefix: 'Your appointment is scheduled for',
+      suffix: '. Reply if you need help.',
+      example: '10 May at 2:00 PM',
+      detailPlaceholder: '10 May at 2:00 PM',
     },
     ACCOUNT_UPDATE: {
       prefix: 'Your account update:',
-      suffix: '.',
+      suffix: ' Contact us if this was not you.',
       example: 'your password was changed successfully',
       detailPlaceholder: 'your password was changed successfully',
     },
   };
+
+  const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
 
   let preparedPageId = null;
   let preparePromise = null;
@@ -42,7 +44,9 @@ const Utility = (function () {
   }
 
   function buildBodyText(prefix, suffix) {
-    return `${String(prefix || '').trim()} {{1}}${suffix || ''}`;
+    const safeSuffix = String(suffix || '').trim() || '.';
+    const gap = safeSuffix.startsWith('.') || safeSuffix.startsWith(',') ? '' : ' ';
+    return `${String(prefix || '').trim()} {{1}}${gap}${safeSuffix}`;
   }
 
   function formatTemplatePreview(def, detailExample) {
@@ -92,6 +96,10 @@ const Utility = (function () {
     const text = String(prefix || '').trim();
     if (!text) return 'Enter your custom message text.';
     if (text.includes('{{1}}')) return 'Do not type {{1}} — use Message details for that part.';
+    if (MARKETING_WORDS.test(text)) {
+      return 'Meta rejects promotional words in utility messages. Use neutral appointment/order updates only.';
+    }
+    if (text.length > 120) return 'Keep custom text short and transactional (max 120 characters).';
     return '';
   }
 
@@ -158,53 +166,144 @@ const Utility = (function () {
     return list.find((t) => t.name === name) || null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
-    const def = getTemplateDef(categoryKey, pageId);
-    if (!def) throw new Error('Unknown notification type');
+  async function findAnyApprovedTemplate(pageId, pageToken, categoryKey) {
+    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+    const tag = categoryKey.toLowerCase();
+    return (
+      list.find(
+        (t) =>
+          t.status === 'APPROVED' &&
+          t.name.startsWith('pagechat_') &&
+          (t.name.includes(tag) || t.name.includes('pagechat_lib_'))
+      ) || null
+    );
+  }
 
-    const primaryName = ownedTemplateName(pageId, categoryKey, def.bodyText);
-    let existing = await findPageTemplate(pageId, pageToken, primaryName);
+  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 5) {
+    for (let i = 0; i < attempts; i++) {
+      await sleep(1200 + i * 600);
+      const tpl = await findPageTemplate(pageId, pageToken, name);
+      if (tpl?.status === 'APPROVED' || tpl?.status === 'REJECTED') return tpl;
+    }
+    return findPageTemplate(pageId, pageToken, name);
+  }
 
-    if (existing?.status === 'APPROVED') {
-      return normalizeOwned(primaryName, def);
+  function normalizeLibraryTemplate(name, libTpl) {
+    const body = libTpl?.body || 'Your update: {{1}}. Thank you.';
+    return {
+      name,
+      language: String(libTpl?.language || 'en').replace('_US', '').slice(0, 2) || 'en',
+      status: 'APPROVED',
+      body,
+      preview: body.replace(/\{\{1\}\}/g, '…'),
+      bodyParamCount: 1,
+      paramRoles: ['detail'],
+      buttons: libTpl?.buttons || [],
+    };
+  }
+
+  async function tryCreateOwnedTemplate(pageId, pageToken, def, name) {
+    const existing = await findPageTemplate(pageId, pageToken, name);
+    if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
+    if (existing?.status === 'REJECTED' || existing?.status === 'PENDING') return null;
+
+    await GraphAPI.createPageUtilityTemplate(pageId, pageToken, ownedPayload(name, def));
+    const result = await waitForTemplateApproval(pageId, pageToken, name);
+    if (result?.status === 'APPROVED') return normalizeOwned(name, def);
+    return null;
+  }
+
+  async function tryMetaLibraryTemplate(pageId, pageToken, categoryKey) {
+    const search = {
+      POST_PURCHASE_UPDATE: 'order delivery',
+      CONFIRMED_EVENT_UPDATE: 'appointment reminder',
+      ACCOUNT_UPDATE: 'account update',
+    };
+    const query = search[categoryKey];
+    if (!query) return null;
+
+    let libList = [];
+    try {
+      libList = await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
+        name_or_content: query,
+        language: 'en',
+      });
+    } catch {
+      return null;
     }
 
-    if (existing?.status === 'PENDING') {
-      await sleep(1500);
-      existing = await findPageTemplate(pageId, pageToken, primaryName);
-      if (existing?.status === 'APPROVED') {
-        return normalizeOwned(primaryName, def);
-      }
-    }
+    const pick =
+      (libList || []).find((t) => t.category === 'UTILITY') || (libList || [])[0];
+    if (!pick?.name) return null;
 
-    const createName =
-      existing?.status === 'REJECTED'
-        ? `${primaryName}_${Date.now().toString(36).slice(-5)}`
-        : primaryName;
+    const cloneName = `pagechat_lib_${categoryKey.toLowerCase().slice(0, 14)}_${String(pageId).slice(-8)}`;
+    const existing = await findPageTemplate(pageId, pageToken, cloneName);
+    if (existing?.status === 'APPROVED') return normalizeLibraryTemplate(cloneName, pick);
 
-    if (!existing || existing.status === 'REJECTED') {
+    if (existing?.status !== 'REJECTED' && existing?.status !== 'PENDING') {
       try {
-        const created = await GraphAPI.createPageUtilityTemplate(
-          pageId,
-          pageToken,
-          ownedPayload(createName, def)
-        );
-        if (created.status && created.status !== 'APPROVED') {
-          await sleep(1200);
-          const again = await findPageTemplate(pageId, pageToken, createName);
-          if (again?.status !== 'APPROVED') {
-            throw new Error(`Template "${createName}" is ${(again?.status || created.status).toLowerCase()}.`);
-          }
-        }
-        return normalizeOwned(createName, def);
-      } catch (err) {
-        const again = await findPageTemplate(pageId, pageToken, createName);
-        if (again?.status === 'APPROVED') return normalizeOwned(createName, def);
-        throw err;
+        await GraphAPI.cloneUtilityLibraryTemplate(pageId, pageToken, {
+          name: cloneName,
+          category: 'UTILITY',
+          language: pick.language || 'en_US',
+          library_template_name: pick.name,
+        });
+      } catch {
+        return null;
       }
     }
 
-    throw new Error(`Template "${primaryName}" is ${existing.status.toLowerCase()}.`);
+    const approved = await waitForTemplateApproval(pageId, pageToken, cloneName);
+    if (approved?.status === 'APPROVED') return normalizeLibraryTemplate(cloneName, pick);
+    return null;
+  }
+
+  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
+    const customDef = getTemplateDef(categoryKey, pageId);
+    if (!customDef) throw new Error('Unknown notification type');
+
+    const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken, categoryKey);
+    if (approvedExisting) {
+      return normalizeOwned(approvedExisting.name, customDef);
+    }
+
+    const defaultDef = getDefaultTemplateDef(categoryKey);
+    const tries = [];
+    if (customDef.bodyText !== defaultDef.bodyText) tries.push(customDef);
+    tries.push(defaultDef);
+
+    for (const def of tries) {
+      const baseName = ownedTemplateName(pageId, categoryKey, def.bodyText);
+      const names = [
+        baseName,
+        `${baseName}_${Date.now().toString(36).slice(-5)}`,
+        `${baseName}_${Date.now().toString(36)}`,
+      ];
+
+      for (const name of names) {
+        const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+        if (created) {
+          if (def === defaultDef && customDef.bodyText !== defaultDef.bodyText) {
+            showStatus(
+              'Meta rejected custom text. Using default approved template instead.',
+              true
+            );
+          }
+          return created;
+        }
+      }
+    }
+
+    const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, categoryKey);
+    if (libraryTpl) {
+      showStatus('Using Meta pre-approved notification template.', true);
+      return libraryTpl;
+    }
+
+    throw new Error(
+      'Meta rejected the notification template. Use simple transactional text only — ' +
+        'no sales, offers, or promotions. Example custom text: "Your appointment is scheduled for"'
+    );
   }
 
   function buildSendComponents(tpl, detail, customerName) {
