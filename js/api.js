@@ -15,9 +15,15 @@ const GraphAPI = (function () {
   let permissionCacheAt = 0;
   const PERM_CACHE_MS = 60000;
 
+  function normalizeOutgoingText(text) {
+    return String(text ?? '').normalize('NFC');
+  }
+
   function apiVersion() {
     return FB_CONFIG.version || 'v21.0';
   }
+
+  const JSON_UTF8 = { 'Content-Type': 'application/json; charset=utf-8' };
 
   function getUserAccessToken() {
     const auth = typeof FB !== 'undefined' && FB.getAuthResponse?.();
@@ -168,7 +174,7 @@ const GraphAPI = (function () {
     try {
       const res = await fetch('/api/debug-token', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: JSON_UTF8,
         body: JSON.stringify({ input_token: accessToken }),
       });
       return await res.json();
@@ -191,7 +197,7 @@ const GraphAPI = (function () {
     const url = graphUrl(pathSegments, query, accessToken);
     const init = { method: 'POST' };
     if (body != null && typeof body === 'object' && Object.keys(body).length > 0) {
-      init.headers = { 'Content-Type': 'application/json' };
+      init.headers = JSON_UTF8;
       init.body = JSON.stringify(body);
     }
     const res = await fetch(url, init);
@@ -340,7 +346,7 @@ const GraphAPI = (function () {
   async function startBroadcastCampaign(payload) {
     const res = await fetch('/api/broadcast/start', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_UTF8,
       body: JSON.stringify(payload),
     });
     const data = await res.json();
@@ -394,10 +400,20 @@ const GraphAPI = (function () {
   async function sendMessage(pageId, pageToken, recipientPsid, text, options = {}) {
     const result = await pagePost(pageToken, [pageId, 'messages'], null, {
       recipient: { id: recipientPsid },
-      message: { text },
+      messaging_type: 'RESPONSE',
+      message: { text: normalizeOutgoingText(text) },
       ...options,
     });
     return result;
+  }
+
+  /** Plain UTF-8 utility text — preserves emoji better than template {{1}} on some Pages. */
+  async function sendUtilityPlainText(pageId, pageToken, recipientPsid, text) {
+    return pagePost(pageToken, [pageId, 'messages'], null, {
+      recipient: { id: recipientPsid },
+      messaging_type: 'UTILITY',
+      message: { text: normalizeOutgoingText(text) },
+    });
   }
 
   /** Send plain text outside the 24-hour window using a Meta message tag. */
@@ -407,7 +423,7 @@ const GraphAPI = (function () {
       recipient: { id: recipientPsid },
       messaging_type: 'MESSAGE_TAG',
       tag,
-      message: { text },
+      message: { text: normalizeOutgoingText(text) },
     });
   }
 
@@ -794,6 +810,7 @@ const GraphAPI = (function () {
     getConversationMessages,
     markConversationSeen,
     sendMessage,
+    sendUtilityPlainText,
     sendTaggedMessage,
     getPageMessageTemplates,
     createPageUtilityTemplate,

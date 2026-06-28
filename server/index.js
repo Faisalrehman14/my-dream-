@@ -23,8 +23,12 @@ const WEB_ROOT = path.join(__dirname, '..');
 /** pageId → timestamp of last webhook message (client polls for instant inbox refresh) */
 const inboxSignals = new Map();
 
-app.use(express.json());
+app.use(express.json({ type: 'application/json' }));
 app.use(express.urlencoded({ extended: true }));
+app.use('/api', (req, res, next) => {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  next();
+});
 
 function baseUrl(req) {
   const proto = req.get('x-forwarded-proto') || req.protocol || 'https';

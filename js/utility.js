@@ -1,25 +1,25 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v13';
+  const TEMPLATE_VERSION = 'v14';
 
   /** Minimal wrapper — your full text replaces {{1}}. No "Contact us" suffix. */
   const TEMPLATE_BODIES = [
     {
       bodyText: 'Hello,\n\n{{1}}',
-      example: 'Are you there? We are here for you.',
+      example: 'Are you there 👋 We are here for you.',
     },
     {
       bodyText: 'Your message:\n{{1}}',
-      example: 'Are you there? We are here for you.',
+      example: 'Are you there 👋 We are here for you.',
     },
     {
       bodyText: 'Message:\n{{1}}',
-      example: 'Are you there? We are here for you.',
+      example: 'Are you there 👋 We are here for you.',
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: 'Are you there? We are here for you.',
+      example: 'Are you there 👋 We are here for you.',
     },
   ];
 
@@ -141,8 +141,12 @@ const Utility = (function () {
     };
   }
 
+  function normalizeOutgoingText(text) {
+    return String(text ?? '').normalize('NFC');
+  }
+
   function validateMessage(text) {
-    const msg = String(text || '').trim();
+    const msg = normalizeOutgoingText(text).trim();
     if (!msg) return 'Enter your notification message.';
     if (msg.includes('{{1}}')) return 'Just type your message normally — do not use {{1}}.';
     if (MARKETING_WORDS.test(msg)) {
@@ -580,6 +584,7 @@ const Utility = (function () {
 
   async function trySendUtilityTemplate(page, psid, msg, rawTemplate) {
     const norm = normalizeFromApi(rawTemplate);
+    const detail = normalizeOutgoingText(msg);
     const langs = uniqueLanguageCodes(rawTemplate.language);
     let lastErr = null;
     for (const code of langs) {
@@ -587,7 +592,7 @@ const Utility = (function () {
         const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
           name: norm.name,
           language: { code },
-          components: [{ type: 'body', parameters: [{ type: 'text', text: msg }] }],
+          components: [{ type: 'body', parameters: [{ type: 'text', text: detail }] }],
         });
         return { result, tpl: { ...norm, language: code } };
       } catch (err) {
@@ -601,16 +606,26 @@ const Utility = (function () {
 
   async function sendViaUtility(page, psid, msg, categoryKey) {
     clearTemplateCache(page.id);
+    const detail = normalizeOutgoingText(msg);
     let lastErr = null;
+
+    try {
+      const result = await GraphAPI.sendUtilityPlainText(page.id, page.access_token, psid, detail);
+      rememberPreview(page.id, psid, detail);
+      return result;
+    } catch (err) {
+      lastErr = err;
+      if (isRateLimitError(err)) throw err;
+    }
 
     for (let round = 0; round < 2; round++) {
       const candidates = await listLiveSendableTemplates(page.id, page.access_token);
       for (const raw of candidates) {
         try {
-          const { result, tpl } = await trySendUtilityTemplate(page, psid, msg, raw);
+          const { result, tpl } = await trySendUtilityTemplate(page, psid, detail, raw);
           templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
           readyTemplates.set(categoryKey || 'custom', tpl);
-          rememberPreview(page.id, psid, msg);
+          rememberPreview(page.id, psid, detail);
           return result;
         } catch (err) {
           lastErr = err;
@@ -698,7 +713,7 @@ const Utility = (function () {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
     if (!psid || !text?.trim()) throw new Error('Select a customer and enter a message');
 
-    const msg = text.trim();
+    const msg = normalizeOutgoingText(text).trim();
     const error = validateMessage(msg);
     if (error) throw new Error(error);
 
@@ -758,7 +773,7 @@ const Utility = (function () {
   }
 
   async function startBulkCampaign(page, recipients, text, categoryKey, options = {}) {
-    const detail = text.trim();
+    const detail = normalizeOutgoingText(text).trim();
     options.onProgress?.({
       current: 0,
       total: recipients.length,

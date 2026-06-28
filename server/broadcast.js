@@ -12,6 +12,12 @@ const MAX_RECIPIENTS = Number(process.env.BROADCAST_MAX_RECIPIENTS) || 10000;
 const jobs = new Map();
 let processorRunning = false;
 
+function normalizeOutgoingText(text) {
+  return String(text ?? '').normalize('NFC');
+}
+
+const JSON_UTF8 = { 'Content-Type': 'application/json; charset=utf-8' };
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -64,7 +70,7 @@ function createJob(payload) {
     pageToken: payload.pageToken,
     templateName: payload.templateName || '',
     language: payload.language || 'en',
-    detail: String(payload.detail).trim(),
+    detail: normalizeOutgoingText(payload.detail).trim(),
     directOnly: Boolean(payload.directOnly),
     recipients: payload.recipients.map((r) => ({
       psid: String(r.psid),
@@ -90,9 +96,32 @@ async function sendDirect(job, recipient) {
     `?access_token=${encodeURIComponent(job.pageToken)}`;
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: JSON_UTF8,
     body: JSON.stringify({
       recipient: { id: recipient.psid },
+      messaging_type: 'RESPONSE',
+      message: { text: job.detail },
+    }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || 'Send failed');
+    err.code = data.error.code;
+    throw err;
+  }
+  return data;
+}
+
+async function sendUtilityPlain(job, recipient) {
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
+    `?access_token=${encodeURIComponent(job.pageToken)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: JSON_UTF8,
+    body: JSON.stringify({
+      recipient: { id: recipient.psid },
+      messaging_type: 'UTILITY',
       message: { text: job.detail },
     }),
   });
@@ -114,7 +143,7 @@ async function sendUtility(job, recipient) {
       `?access_token=${encodeURIComponent(job.pageToken)}`;
     const res = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: JSON_UTF8,
       body: JSON.stringify({
         recipient: { id: recipient.psid },
         messaging_type: 'UTILITY',
@@ -186,6 +215,11 @@ async function sendOne(job, recipient) {
   } catch (err) {
     if (err.code === 4) throw err;
     if (!isMessagingWindowError(err)) throw err;
+    try {
+      return await sendUtilityPlain(job, recipient);
+    } catch (plainErr) {
+      if (plainErr.code === 4) throw plainErr;
+    }
     if (!job.templateName) {
       throw new Error(
         'No utility template on this Page. Open Notifications while logged in, wait for template setup, then retry bulk send.'
