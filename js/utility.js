@@ -1,12 +1,16 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v12';
+  const TEMPLATE_VERSION = 'v13';
 
-  /** Customer sees only {{1}} — your exact message text. */
+  /** Minimal wrapper — your full text replaces {{1}}. No "Contact us" suffix. */
   const TEMPLATE_BODIES = [
     {
-      bodyText: '{{1}}',
+      bodyText: 'Hello,\n\n{{1}}',
+      example: 'Are you there? We are here for you.',
+    },
+    {
+      bodyText: 'Your message:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
     {
@@ -14,10 +18,12 @@ const Utility = (function () {
       example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: 'Hello,\n\n{{1}}',
+      bodyText: 'Update:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
   ];
+
+  const SAFE_LIBRARY_KEYS = ['CONFIRMED_EVENT_UPDATE', 'POST_PURCHASE_UPDATE'];
 
   /** pageId -> template object, or false when lookup failed */
   const templateCache = new Map();
@@ -95,9 +101,11 @@ const Utility = (function () {
     );
   }
 
-  function isSendableCustomTemplate(tpl) {
-    if (!isOwnedCustomTemplate(tpl?.name)) return false;
-    return !hasUnwantedWrapper(tpl.body || templateBodyFromApi(tpl));
+  function isSendableTemplate(tpl) {
+    const body = tpl?.body || templateBodyFromApi(tpl) || '';
+    if (hasUnwantedWrapper(body)) return false;
+    const name = String(tpl?.name || '');
+    return isOwnedCustomTemplate(name) || name.startsWith('pagechat_lib_');
   }
 
   function normalizeFromApi(tpl) {
@@ -163,10 +171,10 @@ const Utility = (function () {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  function ownedPayload(name, def) {
+  function ownedPayload(name, def, language = 'en_US') {
     return {
       name,
-      language: 'en_US',
+      language,
       category: 'UTILITY',
       components: [
         {
@@ -237,7 +245,7 @@ const Utility = (function () {
       return finalizeTemplateRecord(pageId, pageToken, name, def);
     }
     if (existing?.status === 'PENDING') {
-      existing = await waitForTemplateApproval(pageId, pageToken, name);
+      existing = await waitForTemplateApproval(pageId, pageToken, name, 20);
       if (existing?.status === 'APPROVED') {
         return finalizeTemplateRecord(pageId, pageToken, name, def);
       }
@@ -245,23 +253,27 @@ const Utility = (function () {
     }
     if (existing?.status === 'REJECTED') return null;
 
-    try {
-      const created = await GraphAPI.createPageUtilityTemplate(
-        pageId,
-        pageToken,
-        ownedPayload(name, def)
-      );
-      if (created?.status === 'APPROVED') {
-        return finalizeTemplateRecord(pageId, pageToken, name, def);
+    let lastErr = null;
+    for (const lang of ['en_US', 'en']) {
+      try {
+        const created = await GraphAPI.createPageUtilityTemplate(
+          pageId,
+          pageToken,
+          ownedPayload(name, def, lang)
+        );
+        if (created?.status === 'APPROVED') {
+          return finalizeTemplateRecord(pageId, pageToken, name, def);
+        }
+        const result = await waitForTemplateApproval(pageId, pageToken, name, 20);
+        if (result?.status === 'APPROVED') {
+          return finalizeTemplateRecord(pageId, pageToken, name, def);
+        }
+      } catch (err) {
+        lastErr = err;
+        if (err.code === 4 || err.rateLimited) throw err;
       }
-      const result = await waitForTemplateApproval(pageId, pageToken, name);
-      if (result?.status === 'APPROVED') {
-        return finalizeTemplateRecord(pageId, pageToken, name, def);
-      }
-    } catch (err) {
-      if (err.code === 4 || err.rateLimited) throw err;
-      throw err;
     }
+    if (lastErr) throw lastErr;
     return null;
   }
 
@@ -348,14 +360,14 @@ const Utility = (function () {
   async function tryMetaLibraryTemplate(pageId, pageToken, categoryKey) {
     const existing = await findApprovedLibClone(pageId, pageToken, categoryKey);
     if (existing) {
-      return normalizeFromApi(existing);
+      const normalized = normalizeFromApi(existing);
+      if (isSendableTemplate(normalized)) return normalized;
     }
 
-    const libList = await browseUtilityLibrary(pageToken);
+    const libList = (await browseUtilityLibrary(pageToken)).filter(isSafeLibraryPick);
     const searchHint = {
       POST_PURCHASE_UPDATE: /order|delivery|ship|purchase/i,
       CONFIRMED_EVENT_UPDATE: /appointment|event|remind|confirm/i,
-      ACCOUNT_UPDATE: /account|profile|update/i,
     };
     const hint = searchHint[categoryKey];
     const pick =
@@ -408,6 +420,56 @@ const Utility = (function () {
     return null;
   }
 
+  function isSafeLibraryPick(pick) {
+    const body = String(pick?.body || pick?.components?.[0]?.text || '');
+    const name = String(pick?.name || '').toLowerCase();
+    if (hasUnwantedWrapper(body)) return false;
+    if (name.includes('account_update') || name.includes('account update')) return false;
+    return true;
+  }
+
+  async function trySafeLibraryTemplate(pageId, pageToken) {
+    for (const key of SAFE_LIBRARY_KEYS) {
+      try {
+        const tpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
+        if (tpl && isSendableTemplate(tpl)) return tpl;
+      } catch (err) {
+        if (err.code === 4 || err.rateLimited) throw err;
+      }
+    }
+
+    const libList = await browseUtilityLibrary(pageToken);
+    const pick = libList.find(isSafeLibraryPick);
+    if (!pick?.name) return null;
+
+    const cloneName = `pagechat_lib_safe_${String(pageId).slice(-8)}`;
+    const existing = await findPageTemplate(pageId, pageToken, cloneName);
+    if (existing?.status === 'APPROVED' && isSendableTemplate(normalizeFromApi(existing))) {
+      return normalizeFromApi(existing);
+    }
+    if (existing?.status === 'PENDING') {
+      const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 20);
+      if (approved?.status === 'APPROVED') return normalizeFromApi(approved);
+      return null;
+    }
+    if (existing?.status === 'REJECTED') return null;
+
+    try {
+      await GraphAPI.cloneUtilityLibraryTemplate(
+        pageId,
+        pageToken,
+        buildLibraryClonePayload(cloneName, pick)
+      );
+    } catch (err) {
+      if (err.code === 4 || err.rateLimited) throw err;
+      return null;
+    }
+
+    const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 20);
+    if (approved?.status === 'APPROVED') return normalizeFromApi(approved);
+    return null;
+  }
+
   async function ensureUtilityTemplate(pageId, pageToken, _categoryKey) {
     const owned = await findOwnedCustomTemplate(pageId, pageToken);
     if (owned) {
@@ -431,6 +493,14 @@ const Utility = (function () {
           if (err.code === 4 || err.rateLimited) throw err;
         }
       }
+    }
+
+    try {
+      const libTpl = await trySafeLibraryTemplate(pageId, pageToken);
+      if (libTpl) return libTpl;
+    } catch (err) {
+      lastError = err;
+      if (err.code === 4 || err.rateLimited) throw err;
     }
 
     const hint = lastError?.message?.includes('pages_utility_messaging')
@@ -486,7 +556,7 @@ const Utility = (function () {
     );
     if (matches.length) {
       const resolved = normalizeFromApi(matches[0]);
-      if (isSendableCustomTemplate(resolved)) return resolved;
+      if (isSendableTemplate(resolved)) return resolved;
     }
     const err = new Error('WRAPPER_TEMPLATE');
     err.wrapperTemplate = true;
