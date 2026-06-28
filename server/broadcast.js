@@ -49,7 +49,7 @@ function publicJob(job) {
 function isAllowedUtilityTemplateName(name) {
   const n = String(name || '').toLowerCase();
   if (!n.startsWith('pagechat_')) return false;
-  const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
+  const blocked = ['post_purchase', 'account_update', 'order_confirm'];
   if (blocked.some((part) => n.includes(part))) return false;
   if (n.includes('_custom_') && !n.includes('_lib_')) return true;
   if (n.includes('pagechat_lib_minimal_')) return true;
@@ -142,14 +142,15 @@ function hasUnwantedWrapper(body) {
     'contact us if this was not you',
     'account update:',
     'thank you for your order',
-    'good news!',
-    'good news',
     'your order is now',
     'order is now',
+    'your order #',
     'reminder: your appointment',
     'your appointment is',
     'your recent purchase',
     'shipment tracking',
+    'on its way',
+    'track order',
   ];
   return blocked.some((phrase) => b.includes(phrase));
 }
@@ -161,10 +162,11 @@ function isExactMessageBody(body) {
 }
 
 const SENDABLE_CUSTOM_BODIES = new Set([
+  'Good news! {{1}}',
+  'Good news! {{1}}.',
   '({{1}})',
   'Message:\n{{1}}',
   'Update:\n{{1}}',
-  'Hello,\n\n{{1}}',
 ]);
 
 function isSendableCustomBody(body) {
@@ -181,7 +183,7 @@ function isSendableTemplateBody(body) {
   const params = b.match(/\{\{\d+\}\}/g) || [];
   if (params.length !== 1 || !b.includes('{{1}}')) return false;
   const staticLen = b.replace(/\{\{\d+\}\}/g, '').trim().length;
-  return staticLen > 0 && staticLen <= 56;
+  return staticLen > 0 && staticLen <= 80;
 }
 
 async function fetchTemplateByName(pageId, pageToken, name) {

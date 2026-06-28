@@ -1,16 +1,21 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v22';
+  const TEMPLATE_VERSION = 'v23';
 
-  /**
-   * Meta requires static text before/after {{1}} — invisible unicode gets rejected.
-   * Bodies ordered by preference: minimal visible wrap first, then short labels.
-   */
+  /** Minimal wraps — user text in {{1}}. "Good news! …" is OK per Meta + user preference. */
   const TEMPLATE_BODIES = [
     {
+      bodyText: 'Good news! {{1}}',
+      example: 'Your VIP bonus is now live.',
+    },
+    {
+      bodyText: 'Good news! {{1}}.',
+      example: 'Your VIP bonus is now live.',
+    },
+    {
       bodyText: '({{1}})',
-      example: 'We received your request and will reply shortly.',
+      example: 'Your VIP bonus is now live.',
     },
     {
       bodyText: 'Message:\n{{1}}',
@@ -18,10 +23,6 @@ const Utility = (function () {
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: 'We received your request and will reply shortly.',
-    },
-    {
-      bodyText: 'Hello,\n\n{{1}}',
       example: 'We received your request and will reply shortly.',
     },
   ];
@@ -104,14 +105,15 @@ const Utility = (function () {
       'contact us if this was not you',
       'account update:',
       'thank you for your order',
-      'good news!',
-      'good news',
       'your order is now',
       'order is now',
+      'your order #',
       'reminder: your appointment',
       'your appointment is',
       'your recent purchase',
       'shipment tracking',
+      'on its way',
+      'track order',
     ];
     return blocked.some((phrase) => b.includes(phrase));
   }
@@ -119,7 +121,7 @@ const Utility = (function () {
   function isAllowedTemplateName(name) {
     const n = String(name || '').toLowerCase();
     if (!n.startsWith('pagechat_')) return false;
-    const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
+    const blocked = ['post_purchase', 'account_update', 'order_confirm'];
     if (blocked.some((part) => n.includes(part))) return false;
     if (n.includes('_custom_') && !n.includes('_lib_')) return true;
     if (n.includes('pagechat_lib_minimal_')) return true;
@@ -140,8 +142,7 @@ const Utility = (function () {
     if (
       name.includes('post_purchase') ||
       name.includes('account_update') ||
-      name.includes('order_confirm') ||
-      name.includes('good_news')
+      name.includes('order_confirm')
     ) {
       return true;
     }
@@ -176,16 +177,16 @@ const Utility = (function () {
     const params = b.match(/\{\{\d+\}\}/g) || [];
     if (params.length !== 1 || !b.includes('{{1}}')) return false;
     const staticLen = b.replace(/\{\{\d+\}\}/g, '').trim().length;
-    return staticLen > 0 && staticLen <= 56;
+    return staticLen > 0 && staticLen <= 80;
   }
 
   function bodyPreferScore(body) {
     const b = String(body || '').trim();
-    if (isExactMessageBody(b)) return 100;
-    if (b === '({{1}})') return 95;
-    if (b === 'Message:\n{{1}}' || b === 'Update:\n{{1}}') return 80;
-    if (b === 'Hello,\n\n{{1}}') return 70;
-    return isSendableCustomBody(b) ? 50 : 0;
+    if (b === 'Good news! {{1}}' || b === 'Good news! {{1}}.') return 100;
+    if (isExactMessageBody(b)) return 95;
+    if (b === '({{1}})') return 90;
+    if (b === 'Message:\n{{1}}' || b === 'Update:\n{{1}}') return 75;
+    return isSendableCustomBody(b) ? 60 : 0;
   }
 
   async function enrichTemplateRecord(pageId, pageToken, tpl) {
@@ -559,7 +560,7 @@ const Utility = (function () {
     } catch {
       /* ignore */
     }
-    for (const q of ['message', 'hello', 'support', 'reply', 'notification', 'update', 'contact']) {
+    for (const q of ['good news', 'message', 'hello', 'support', 'reply', 'notification', 'update']) {
       try {
         add(
           await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
@@ -591,7 +592,8 @@ const Utility = (function () {
       const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
       const btnCount = (pick?.buttons || []).length;
       let score = 200 - staticLen - btnCount * 15;
-      if (body === '({{1}})' || body.startsWith('Message:')) score += 30;
+      if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 40;
+      if (body === '({{1}})' || body.startsWith('Message:')) score += 20;
       if (score > bestScore) {
         bestScore = score;
         best = pick;
@@ -979,12 +981,12 @@ const Utility = (function () {
     preparePromise = (async () => {
       readyTemplates.clear();
       clearTemplateCache(page.id);
-      showStatus('Preparing exact-message template…', true, true);
+      showStatus('Preparing notification template (Good news! + your text)…', true, true);
       try {
         cleanupWrapperTemplatesFromPage(page.id, page.access_token).catch(() => {});
         const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
         readyTemplates.set('custom', tpl);
-        showStatus(`Ready — exact template: ${tpl.name}`, true);
+        showStatus(`Ready — template: ${tpl.name}`, true);
       } catch (err) {
         if (isRateLimitError(err)) {
           showStatus(err.message, false);
@@ -1186,7 +1188,23 @@ const Utility = (function () {
     const preview = document.getElementById('utility-template-preview');
     const msg = document.getElementById('utility-message')?.value?.trim();
     if (!preview) return;
-    preview.textContent = msg || 'we are here for you';
+    const ready = readyTemplates.get('custom') || readyTemplates.get(_categoryKey);
+    const body = String(ready?.body || 'Good news! {{1}}');
+    if (!msg) {
+      preview.textContent = 'Good news! …';
+      return;
+    }
+    if (body === '({{1}})') {
+      preview.textContent = `(${msg})`;
+    } else if (body === 'Message:\n{{1}}') {
+      preview.textContent = `Message:\n${msg}`;
+    } else if (body === 'Update:\n{{1}}') {
+      preview.textContent = `Update:\n${msg}`;
+    } else if (body === 'Good news! {{1}}.') {
+      preview.textContent = `Good news! ${msg}.`;
+    } else {
+      preview.textContent = `Good news! ${msg}`;
+    }
   }
 
   function loadTemplateForm(page) {
