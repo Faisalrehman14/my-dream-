@@ -186,8 +186,23 @@ const Utility = (function () {
     };
   }
 
+  function templatePreferScore(name) {
+    const n = String(name || '');
+    if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) return 100;
+    if (isOwnedCustomTemplate(n)) return 90;
+    if (n.startsWith('pagechat_lib_safe_')) return 85;
+    if (n.startsWith('pagechat_lib_')) return 70;
+    if (n.startsWith('pagechat_')) return 60;
+    return 10;
+  }
+
+  function uniqueLanguageCodes(lang) {
+    const variants = [parseTemplateLanguage(lang), ...templateLanguageVariants(lang)];
+    return [...new Set(variants.filter(Boolean))];
+  }
+
   async function findPageTemplate(pageId, pageToken, name) {
-    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { name });
+    const list = await listPageTemplates(pageId, pageToken);
     return list.find((t) => t.name === name) || null;
   }
 
@@ -233,21 +248,25 @@ const Utility = (function () {
     return findPageTemplate(pageId, pageToken, name);
   }
 
-  async function finalizeTemplateRecord(pageId, pageToken, name, def) {
-    const fresh = await findPageTemplate(pageId, pageToken, name);
-    if (fresh && isApprovedStatus(fresh.status)) return normalizeFromApi(fresh);
-    return normalizeTemplateRecord(name, 'en_US', def);
+  async function finalizeTemplateRecord(pageId, pageToken, name) {
+    for (let i = 0; i < 6; i++) {
+      const fresh = await findPageTemplate(pageId, pageToken, name);
+      if (fresh && isApprovedStatus(fresh.status)) return normalizeFromApi(fresh);
+      if (fresh?.status === 'REJECTED') return null;
+      if (i < 5) await sleep(1200);
+    }
+    return null;
   }
 
   async function tryCreateOwnedTemplate(pageId, pageToken, def, name) {
     let existing = await findPageTemplate(pageId, pageToken, name);
     if (existing?.status === 'APPROVED') {
-      return finalizeTemplateRecord(pageId, pageToken, name, def);
+      return finalizeTemplateRecord(pageId, pageToken, name);
     }
     if (existing?.status === 'PENDING') {
       existing = await waitForTemplateApproval(pageId, pageToken, name, 20);
       if (existing?.status === 'APPROVED') {
-        return finalizeTemplateRecord(pageId, pageToken, name, def);
+        return finalizeTemplateRecord(pageId, pageToken, name);
       }
       if (existing?.status === 'PENDING') return null;
     }
@@ -256,17 +275,15 @@ const Utility = (function () {
     let lastErr = null;
     for (const lang of ['en_US', 'en']) {
       try {
-        const created = await GraphAPI.createPageUtilityTemplate(
+        await GraphAPI.createPageUtilityTemplate(
           pageId,
           pageToken,
           ownedPayload(name, def, lang)
         );
-        if (created?.status === 'APPROVED') {
-          return finalizeTemplateRecord(pageId, pageToken, name, def);
-        }
         const result = await waitForTemplateApproval(pageId, pageToken, name, 20);
         if (result?.status === 'APPROVED') {
-          return finalizeTemplateRecord(pageId, pageToken, name, def);
+          const verified = await finalizeTemplateRecord(pageId, pageToken, name);
+          if (verified) return verified;
         }
       } catch (err) {
         lastErr = err;
@@ -473,7 +490,8 @@ const Utility = (function () {
   async function ensureUtilityTemplate(pageId, pageToken, _categoryKey) {
     const owned = await findOwnedCustomTemplate(pageId, pageToken);
     if (owned) {
-      return normalizeFromApi(owned);
+      const verified = await finalizeTemplateRecord(pageId, pageToken, owned.name);
+      if (verified) return verified;
     }
 
     let lastError = null;
@@ -512,14 +530,23 @@ const Utility = (function () {
     );
   }
 
+  async function listLiveSendableTemplates(pageId, pageToken) {
+    const list = await listPageTemplates(pageId, pageToken);
+    return list
+      .filter((t) => isApprovedStatus(t.status))
+      .filter((t) => isSendableTemplate(normalizeFromApi(t)))
+      .sort((a, b) => templatePreferScore(b.name) - templatePreferScore(a.name));
+  }
+
+  async function getVerifiedUtilityTemplate(page, categoryKey) {
+    const live = await listLiveSendableTemplates(page.id, page.access_token);
+    if (live.length) return normalizeFromApi(live[0]);
+    clearTemplateCache(page.id);
+    return ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+  }
+
   async function getUtilityTemplate(page, categoryKey) {
-    const cacheKey = `${page.id}:${categoryKey || 'any'}`;
-    if (templateCache.has(cacheKey)) {
-      return templateCache.get(cacheKey);
-    }
-    const tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
-    templateCache.set(cacheKey, tpl);
-    return tpl;
+    return getVerifiedUtilityTemplate(page, categoryKey);
   }
 
   function clearTemplateCache(pageId) {
@@ -546,44 +573,23 @@ const Utility = (function () {
     );
   }
 
-  async function resolveTemplateForSend(pageId, pageToken, tpl) {
-    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, {
-      name: tpl.name,
-      limit: 100,
-    });
-    const matches = list.filter(
-      (t) => t.name === tpl.name && isApprovedStatus(t.status)
-    );
-    if (matches.length) {
-      const resolved = normalizeFromApi(matches[0]);
-      if (isSendableTemplate(resolved)) return resolved;
-    }
-    const err = new Error('WRAPPER_TEMPLATE');
-    err.wrapperTemplate = true;
-    throw err;
-  }
-
   function isTemplateNotFoundError(err) {
-    return (
-      err?.code === 100 ||
-      String(err?.message || '')
-        .toLowerCase()
-        .includes('template cannot be found')
-    );
+    const msg = String(err?.message || '').toLowerCase();
+    return err?.code === 100 || msg.includes('template cannot be found') || msg.includes('(#100)');
   }
 
-  async function sendUtilityWithLanguageRetry(page, psid, msg, tpl) {
-    const langs = tpl.languageVariants?.length
-      ? tpl.languageVariants
-      : templateLanguageVariants(tpl.language);
+  async function trySendUtilityTemplate(page, psid, msg, rawTemplate) {
+    const norm = normalizeFromApi(rawTemplate);
+    const langs = uniqueLanguageCodes(rawTemplate.language);
     let lastErr = null;
     for (const code of langs) {
       try {
-        return await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
-          name: tpl.name,
+        const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
+          name: norm.name,
           language: { code },
           components: [{ type: 'body', parameters: [{ type: 'text', text: msg }] }],
         });
+        return { result, tpl: { ...norm, language: code } };
       } catch (err) {
         lastErr = err;
         if (isRateLimitError(err)) throw err;
@@ -594,35 +600,41 @@ const Utility = (function () {
   }
 
   async function sendViaUtility(page, psid, msg, categoryKey) {
-    const loadTemplate = async () => {
-      clearTemplateCache(page.id);
-      let tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
-      tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
-      templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
-      readyTemplates.set(categoryKey || 'custom', tpl);
-      return tpl;
-    };
+    clearTemplateCache(page.id);
+    let lastErr = null;
 
-    let tpl;
-    try {
-      tpl = await getUtilityTemplate(page, categoryKey);
-      tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
-    } catch (err) {
-      if (!err.wrapperTemplate) throw err;
-      tpl = await loadTemplate();
+    for (let round = 0; round < 2; round++) {
+      const candidates = await listLiveSendableTemplates(page.id, page.access_token);
+      for (const raw of candidates) {
+        try {
+          const { result, tpl } = await trySendUtilityTemplate(page, psid, msg, raw);
+          templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
+          readyTemplates.set(categoryKey || 'custom', tpl);
+          rememberPreview(page.id, psid, msg);
+          return result;
+        } catch (err) {
+          lastErr = err;
+          if (isRateLimitError(err)) throw err;
+          if (!isTemplateNotFoundError(err)) throw err;
+        }
+      }
+
+      if (round === 0) {
+        try {
+          await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+        } catch (err) {
+          lastErr = err;
+          if (isRateLimitError(err)) throw err;
+        }
+      }
     }
 
-    try {
-      const result = await sendUtilityWithLanguageRetry(page, psid, msg, tpl);
-      rememberPreview(page.id, psid, msg);
-      return result;
-    } catch (err) {
-      if (!isTemplateNotFoundError(err)) throw err;
-      tpl = await loadTemplate();
-      const result = await sendUtilityWithLanguageRetry(page, psid, msg, tpl);
-      rememberPreview(page.id, psid, msg);
-      return result;
-    }
+    throw (
+      lastErr ||
+      new Error(
+        '(#100) Template cannot be found. Open Notifications, wait 1–2 min for setup, then retry.'
+      )
+    );
   }
 
   async function prepare(page) {
@@ -752,7 +764,12 @@ const Utility = (function () {
       total: recipients.length,
       name: 'Preparing utility template…',
     });
-    const tpl = await getUtilityTemplate(page, categoryKey);
+    const tpl = await getVerifiedUtilityTemplate(page, categoryKey);
+    const fresh = await findPageTemplate(page.id, page.access_token, tpl.name);
+    if (!fresh || !isApprovedStatus(fresh.status)) {
+      throw new Error('Utility template not ready yet. Wait 1–2 minutes and try again.');
+    }
+    const verified = normalizeFromApi(fresh);
     options.onProgress?.({
       current: 0,
       total: recipients.length,
@@ -761,8 +778,8 @@ const Utility = (function () {
     const job = await GraphAPI.startBroadcastCampaign({
       pageId: page.id,
       pageToken: page.access_token,
-      templateName: tpl.name,
-      language: tpl.language || 'en_US',
+      templateName: verified.name,
+      language: verified.language,
       detail,
       directOnly: false,
       recipients,

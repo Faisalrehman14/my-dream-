@@ -138,7 +138,7 @@ async function sendUtility(job, recipient) {
     err.code = data.error.code;
     lastErr = err;
     if (err.code === 4) throw err;
-    if (err.code !== 100 && !String(err.message).toLowerCase().includes('template cannot be found')) {
+    if (err.code !== 100 && !String(err.message).toLowerCase().includes('template cannot be found') && !String(err.message).includes('(#100)')) {
       throw err;
     }
   }
