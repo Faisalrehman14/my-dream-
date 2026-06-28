@@ -48,9 +48,12 @@ function publicJob(job) {
 
 function isAllowedUtilityTemplateName(name) {
   const n = String(name || '').toLowerCase();
-  if (!n.startsWith('pagechat_') || !n.includes('_custom_') || n.includes('_lib_')) return false;
+  if (!n.startsWith('pagechat_')) return false;
   const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
-  return !blocked.some((part) => n.includes(part));
+  if (blocked.some((part) => n.includes(part))) return false;
+  if (n.includes('_custom_') && !n.includes('_lib_')) return true;
+  if (n.includes('pagechat_lib_minimal_')) return true;
+  return false;
 }
 
 function validateStartPayload(body) {
@@ -171,6 +174,16 @@ function isSendableCustomBody(body) {
   return SENDABLE_CUSTOM_BODIES.has(b);
 }
 
+function isSendableTemplateBody(body) {
+  const b = String(body || '').trim();
+  if (!b || hasUnwantedWrapper(b)) return false;
+  if (isSendableCustomBody(b)) return true;
+  const params = b.match(/\{\{\d+\}\}/g) || [];
+  if (params.length !== 1 || !b.includes('{{1}}')) return false;
+  const staticLen = b.replace(/\{\{\d+\}\}/g, '').trim().length;
+  return staticLen > 0 && staticLen <= 56;
+}
+
 async function fetchTemplateByName(pageId, pageToken, name) {
   const url =
     `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/message_templates` +
@@ -213,7 +226,7 @@ async function assertExactTemplateForSend(pageId, pageToken, templateName) {
       `Template "${templateName}" has no readable body on Meta. Open Notifications and wait for setup.`
     );
   }
-  if (!isSendableCustomBody(body) || hasUnwantedWrapper(body)) {
+  if (!isSendableTemplateBody(body) || hasUnwantedWrapper(body)) {
     throw new Error(
       `Blocked wrapper template "${templateName}" (body starts: ${body.slice(0, 48)}…). Cancel this bulk job and start a new send after opening Notifications.`
     );

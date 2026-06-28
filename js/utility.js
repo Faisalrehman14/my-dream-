@@ -1,7 +1,7 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v21';
+  const TEMPLATE_VERSION = 'v22';
 
   /**
    * Meta requires static text before/after {{1}} — invisible unicode gets rejected.
@@ -118,9 +118,12 @@ const Utility = (function () {
 
   function isAllowedTemplateName(name) {
     const n = String(name || '').toLowerCase();
-    if (!n.startsWith('pagechat_') || !n.includes('_custom_') || n.includes('_lib_')) return false;
+    if (!n.startsWith('pagechat_')) return false;
     const blocked = ['post_purchase', 'account_update', 'order_confirm', 'good_news'];
-    return !blocked.some((part) => n.includes(part));
+    if (blocked.some((part) => n.includes(part))) return false;
+    if (n.includes('_custom_') && !n.includes('_lib_')) return true;
+    if (n.includes('pagechat_lib_minimal_')) return true;
+    return false;
   }
 
   /** Only PageChat-owned custom templates — library clones cannot be API-deleted (400). */
@@ -130,7 +133,7 @@ const Utility = (function () {
     const body = templateBodyFromApi(tpl);
     if (
       name.includes(`pagechat_${TEMPLATE_VERSION}_custom_`) &&
-      isSendableCustomBody(body)
+      isSendableTemplateBody(body)
     ) {
       return false;
     }
@@ -143,7 +146,8 @@ const Utility = (function () {
       return true;
     }
     if (body && hasUnwantedWrapper(body)) return true;
-    if (name.includes('_custom_') && body && !isSendableCustomBody(body)) return true;
+    if (name.includes('_custom_') && body && !isSendableTemplateBody(body)) return true;
+    if (name.includes('pagechat_lib_minimal_') && body && isSendableTemplateBody(body)) return false;
     return false;
   }
 
@@ -162,6 +166,17 @@ const Utility = (function () {
     if (!b || hasUnwantedWrapper(b)) return false;
     if (isExactMessageBody(b)) return true;
     return knownCustomBodyTexts().has(b);
+  }
+
+  /** Single {{1}} with short static text — used for Meta library clones. */
+  function isSendableTemplateBody(body) {
+    const b = String(body || '').trim();
+    if (!b || hasUnwantedWrapper(b)) return false;
+    if (isSendableCustomBody(b)) return true;
+    const params = b.match(/\{\{\d+\}\}/g) || [];
+    if (params.length !== 1 || !b.includes('{{1}}')) return false;
+    const staticLen = b.replace(/\{\{\d+\}\}/g, '').trim().length;
+    return staticLen > 0 && staticLen <= 56;
   }
 
   function bodyPreferScore(body) {
@@ -311,6 +326,7 @@ const Utility = (function () {
     const n = String(name || '');
     let score = 10;
     if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) score = 100;
+    else if (n.includes('pagechat_lib_minimal_')) score = 88;
     else if (isOwnedCustomTemplate(n)) score = 90;
     else if (n.startsWith('pagechat_')) score = 60;
     const b = String(body || '').trim();
@@ -381,7 +397,7 @@ const Utility = (function () {
     }
     const norm = normalizeFromApi(raw);
     assertSafeTemplate(norm);
-    if (!isSendableCustomBody(body)) {
+    if (!isSendableTemplateBody(body)) {
       const err = new Error('NOT_SENDABLE_TEMPLATE');
       err.notExact = true;
       err.templateBody = body;
@@ -435,7 +451,7 @@ const Utility = (function () {
       const fresh = fetched ? await enrichTemplateRecord(pageId, pageToken, fetched) : null;
       if (fresh && isApprovedStatus(fresh.status)) {
         const body = templateBodyFromApi(fresh);
-        if (!body || hasUnwantedWrapper(body) || !isSendableCustomBody(body)) {
+        if (!body || hasUnwantedWrapper(body) || !isSendableTemplateBody(body)) {
           return null;
         }
         return normalizeFromApi(fresh);
@@ -478,7 +494,7 @@ const Utility = (function () {
           if (verified) return verified;
         }
         if (result?.status === 'REJECTED') {
-          lastErr = new Error(`Meta rejected template "${name}".`);
+          lastErr = new Error('Meta rejected this custom template format.');
         }
       } catch (err) {
         lastErr = err;
@@ -543,7 +559,7 @@ const Utility = (function () {
     } catch {
       /* ignore */
     }
-    for (const q of ['hello', 'update', 'order', 'delivery', 'account', 'appointment', 'message']) {
+    for (const q of ['message', 'hello', 'support', 'reply', 'notification', 'update', 'contact']) {
       try {
         add(
           await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
@@ -557,6 +573,74 @@ const Utility = (function () {
       }
     }
     return collected;
+  }
+
+  function libraryPickBody(pick) {
+    const fromComp = pick?.components?.find(
+      (c) => String(c.type || '').toUpperCase() === 'BODY'
+    )?.text;
+    return String(pick?.body || fromComp || templateBodyFromApi(pick) || '').trim();
+  }
+
+  function pickBestLibraryTemplate(list) {
+    let best = null;
+    let bestScore = -1;
+    for (const pick of list || []) {
+      const body = libraryPickBody(pick);
+      if (!isSendableTemplateBody(body)) continue;
+      const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
+      const btnCount = (pick?.buttons || []).length;
+      let score = 200 - staticLen - btnCount * 15;
+      if (body === '({{1}})' || body.startsWith('Message:')) score += 30;
+      if (score > bestScore) {
+        bestScore = score;
+        best = pick;
+      }
+    }
+    return best;
+  }
+
+  async function tryMinimalLibraryClone(pageId, pageToken) {
+    const baseName = `pagechat_lib_minimal_${String(pageId).slice(-8)}`;
+    const libList = (await browseUtilityLibrary(pageToken)).filter(isSafeLibraryPick);
+    const pick = pickBestLibraryTemplate(libList);
+    if (!pick?.name) return null;
+
+    const tryNames = [
+      baseName,
+      `${baseName}_${Date.now().toString(36).slice(-4)}`,
+    ];
+
+    for (const cloneName of tryNames) {
+      let existing = await findPageTemplate(pageId, pageToken, cloneName);
+      if (existing?.status === 'REJECTED') continue;
+      if (existing?.status === 'PENDING') {
+        existing = await waitForTemplateApproval(pageId, pageToken, cloneName, 15);
+      }
+      if (existing?.status === 'APPROVED') {
+        const enriched = await enrichTemplateRecord(pageId, pageToken, existing);
+        const norm = normalizeFromApi(enriched);
+        if (isSendableTemplateBody(norm.body)) return norm;
+        continue;
+      }
+
+      try {
+        await GraphAPI.cloneUtilityLibraryTemplate(
+          pageId,
+          pageToken,
+          buildLibraryClonePayload(cloneName, pick)
+        );
+        const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 15);
+        if (approved?.status === 'APPROVED') {
+          const enriched = await enrichTemplateRecord(pageId, pageToken, approved);
+          const norm = normalizeFromApi(enriched);
+          if (isSendableTemplateBody(norm.body)) return norm;
+        }
+      } catch (err) {
+        if (err.code === 4 || err.rateLimited) throw err;
+      }
+    }
+    return null;
   }
 
   function pickLibraryTemplate(list) {
@@ -720,17 +804,13 @@ const Utility = (function () {
   async function listLiveSendableTemplates(pageId, pageToken) {
     const list = await listAllPageTemplates(pageId, pageToken);
     const candidates = list.filter(
-      (t) =>
-        isApprovedStatus(t.status) &&
-        isOwnedCustomTemplate(t.name) &&
-        isAllowedTemplateName(t.name)
+      (t) => isApprovedStatus(t.status) && isAllowedTemplateName(t.name)
     );
     const sendable = [];
     for (const raw of candidates) {
       const tpl = await enrichTemplateRecord(pageId, pageToken, raw);
       const body = templateBodyFromApi(tpl);
-      if (!isSendableCustomBody(body)) continue;
-      if (hasUnwantedWrapper(body)) continue;
+      if (!isSendableTemplateBody(body)) continue;
       sendable.push(tpl);
     }
     return sendable.sort(
@@ -761,7 +841,7 @@ const Utility = (function () {
       for (const name of names) {
         try {
           const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-          if (created && isSendableCustomBody(created.body)) {
+          if (created && isSendableTemplateBody(created.body)) {
             assertSafeTemplate(created);
             return created;
           }
@@ -772,9 +852,15 @@ const Utility = (function () {
       }
     }
 
+    const libraryTpl = await tryMinimalLibraryClone(pageId, pageToken);
+    if (libraryTpl) {
+      assertSafeTemplate(libraryTpl);
+      return libraryTpl;
+    }
+
     throw new Error(
       (lastError?.message ||
-        'Meta rejected all custom utility templates. Wait 2–3 min, open Notifications again, then retry.') +
+        'Meta rejected custom templates. Delete pagechat_lib_post_purchase_* in Business Suite, wait 2 min, open Notifications, retry.') +
         (lastError?.message?.includes('pages_utility_messaging')
           ? ' Sign out and sign in again — allow all permissions.'
           : '')
