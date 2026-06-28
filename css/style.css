@@ -1439,6 +1439,22 @@ code { background: #e4e6eb; padding: 2px 6px; border-radius: 4px; font-size: .82
   display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px;
 }
 
+.broadcast-campaign {
+  margin-top: 16px; padding: 16px; border: 1px solid var(--border);
+  border-radius: 10px; background: #f8fafc;
+}
+.broadcast-campaign-head {
+  display: flex; align-items: center; justify-content: space-between;
+  margin-bottom: 12px;
+}
+.broadcast-progress-track {
+  height: 10px; border-radius: 999px; background: #e5e7eb; overflow: hidden;
+}
+.broadcast-progress-bar {
+  height: 100%; width: 0; background: linear-gradient(90deg, #2563eb, #16a34a);
+  transition: width .4s ease;
+}
+
 .portal-settings-content { padding: 0 28px 28px; }
 .portal-settings-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

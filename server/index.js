@@ -7,6 +7,7 @@ const express = require('express');
 const crypto = require('crypto');
 const path = require('path');
 const { attachMetaCompliance } = require('./meta-compliance');
+const { attachBroadcastRoutes } = require('./broadcast');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -34,6 +35,8 @@ attachMetaCompliance(app, {
   appSecret: APP_SECRET,
   getBaseUrl: baseUrl,
 });
+
+attachBroadcastRoutes(app);
 
 // ─── Meta Webhook ─────────────────────────────────────────
 app.get('/webhook', (req, res) => {

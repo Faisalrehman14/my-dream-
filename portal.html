@@ -306,6 +306,8 @@
                   </label>
                 </div>
                 <p class="form-hint">Subscribers are customers who have already messaged your Page.</p>
+                <p id="utility-subscriber-load" class="form-hint hidden"></p>
+                <p class="form-hint">5,000+ customers? Server queue sends ~24/min safely. Rate limits auto-pause and resume.</p>
               </div>
               <div class="portal-form-row">
                 <div class="portal-form-field" id="utility-recipient-field">
@@ -339,6 +341,17 @@
               </div>
               <button type="submit" class="btn-primary" id="utility-submit-btn">Send notification</button>
             </form>
+            <div id="broadcast-campaign" class="broadcast-campaign hidden">
+              <div class="broadcast-campaign-head">
+                <strong>Bulk send queue</strong>
+                <button type="button" class="btn-outline-sm" id="broadcast-cancel-btn">Cancel</button>
+              </div>
+              <div class="broadcast-progress-track">
+                <div id="broadcast-progress-bar" class="broadcast-progress-bar"></div>
+              </div>
+              <p id="broadcast-campaign-status" class="form-hint"></p>
+              <p id="broadcast-campaign-stats" class="form-hint"></p>
+            </div>
             <div id="utility-status" class="status-msg hidden"></div>
           </div>
         </section>

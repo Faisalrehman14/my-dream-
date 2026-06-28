@@ -8,6 +8,8 @@
   let activePage = null;
   let engagementCache = null;
   let loginInFlight = false;
+  let broadcastPollTimer = null;
+  let activeBroadcastId = null;
 
   const VIEW_TITLES = {
     dashboard: 'Dashboard',
@@ -140,7 +142,12 @@
     document.getElementById('composer-form')?.addEventListener('submit', onSendReply);
     document.getElementById('utility-form')?.addEventListener('submit', onSendUtility);
     document.querySelectorAll('input[name="utility-send-mode"]').forEach((radio) => {
-      radio.addEventListener('change', updateUtilitySendMode);
+      radio.addEventListener('change', () => {
+        updateUtilitySendMode();
+        if (isUtilityBulkMode() && activePage) {
+          Inbox.loadAllSubscribers?.(activePage).then(() => updateUtilitySendMode()).catch(() => {});
+        }
+      });
     });
     document.getElementById('utility-tag')?.addEventListener('change', () => {
       Utility.loadTemplateForm?.(activePage);
@@ -153,6 +160,7 @@
       Utility.refreshPreview?.(activePage);
     });
     updateUtilitySendMode();
+    document.getElementById('broadcast-cancel-btn')?.addEventListener('click', onCancelBroadcast);
     document.getElementById('sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('dash-view-all-inbox')?.addEventListener('click', () => switchView('inbox'));
 
@@ -477,6 +485,71 @@
     }
   }
 
+  function updateBroadcastUI(job) {
+    if (!job) return;
+    const panel = document.getElementById('broadcast-campaign');
+    panel?.classList.remove('hidden');
+    const bar = document.getElementById('broadcast-progress-bar');
+    if (bar) bar.style.width = `${job.progress || 0}%`;
+    const status = document.getElementById('broadcast-campaign-status');
+    if (status) status.textContent = job.message || '';
+    const stats = document.getElementById('broadcast-campaign-stats');
+    if (stats) {
+      stats.textContent = `Sent: ${job.sent || 0} · Failed: ${job.failed || 0} · ${job.progress || 0}% · ETA ~${job.etaMinutes || 0} min`;
+    }
+    Utility.showStatus(job.message || 'Bulk send running…', job.status !== 'cancelled', job.status === 'running');
+  }
+
+  function stopBroadcastPolling() {
+    if (broadcastPollTimer) clearInterval(broadcastPollTimer);
+    broadcastPollTimer = null;
+  }
+
+  function startBroadcastPolling(jobId) {
+    activeBroadcastId = jobId;
+    stopBroadcastPolling();
+    broadcastPollTimer = setInterval(async () => {
+      try {
+        const job = await Utility.pollBulkCampaign(jobId, updateBroadcastUI);
+        if (job.status === 'completed' || job.status === 'cancelled') {
+          stopBroadcastPolling();
+          activeBroadcastId = null;
+          Utility.showStatus(job.message, job.status === 'completed');
+          toast(job.message);
+          updateUtilitySendMode();
+        }
+      } catch {
+        /* keep polling */
+      }
+    }, 2500);
+  }
+
+  async function resumeBroadcastIfAny() {
+    try {
+      const job = await Utility.resumeActiveCampaign?.(updateBroadcastUI);
+      if (job && (job.status === 'running' || job.status === 'paused' || job.status === 'queued')) {
+        startBroadcastPolling(job.id);
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function onCancelBroadcast() {
+    if (!activeBroadcastId) return;
+    if (!confirm('Cancel the bulk send queue?')) return;
+    try {
+      const job = await Utility.cancelBulkCampaign(activeBroadcastId);
+      stopBroadcastPolling();
+      activeBroadcastId = null;
+      updateBroadcastUI(job);
+      Utility.showStatus('Bulk send cancelled.', false);
+      updateUtilitySendMode();
+    } catch (err) {
+      toast(err.message, true);
+    }
+  }
+
   function isUtilityBulkMode() {
     return document.querySelector('input[name="utility-send-mode"]:checked')?.value === 'all';
   }
@@ -487,13 +560,20 @@
     const sel = document.getElementById('utility-recipient');
     const btn = document.getElementById('utility-submit-btn');
     const count = Number(document.getElementById('utility-subscriber-count')?.textContent || 0);
+    const campaignRunning = Boolean(activeBroadcastId);
     if (field) field.classList.toggle('hidden', bulk);
     if (sel) sel.required = !bulk;
     if (btn) {
-      btn.textContent = bulk
-        ? `Send to all subscribers (${count})`
-        : 'Send notification';
-      btn.disabled = bulk && count === 0;
+      if (campaignRunning) {
+        btn.textContent = 'Bulk send running…';
+        btn.disabled = true;
+      } else {
+        const etaMin = Math.ceil((count * 2.5) / 60);
+        btn.textContent = bulk
+          ? `Queue send to ${count} subscribers (~${etaMin} min)`
+          : 'Send notification';
+        btn.disabled = bulk && count === 0;
+      }
     }
   }
 
@@ -518,12 +598,27 @@
 
     const recipients = bulk ? Inbox.getUtilityRecipients?.(activePage?.id) || [] : [];
     if (bulk && !recipients.length) {
+      Utility.showStatus('Loading subscribers…', true, true);
+      try {
+        const loaded = await Inbox.loadAllSubscribers?.(activePage);
+        recipients.push(...(loaded || []));
+        updateUtilitySendMode();
+      } catch (err) {
+        Utility.showStatus(err.message, false);
+        return;
+      }
+    }
+    if (bulk && !recipients.length) {
       Utility.showStatus('No subscribers found. Customers must message your Page first.', false);
       return;
     }
     if (bulk) {
+      const etaMin = Math.ceil((recipients.length * 2.5) / 60);
       const ok = confirm(
-        `Send this notification to all ${recipients.length} subscriber${recipients.length === 1 ? '' : 's'}?`
+        `Queue notification for ${recipients.length} subscribers?\n\n` +
+          `Server will send ~24 per minute (~${etaMin} min total).\n` +
+          `If Facebook rate-limits, it auto-pauses and resumes.\n\n` +
+          `Keep this tab open to watch progress (or come back later — server continues on Railway).`
       );
       if (!ok) return;
     }
@@ -534,15 +629,19 @@
       if (bulk) {
         const result = await Utility.sendToAll(activePage, recipients, text, tag, {
           onProgress({ current, total, name }) {
-            Utility.showStatus(`Sending ${current} of ${total}… (${name})`, true, true);
+            Utility.showStatus(`Preparing queue… ${current}/${total} (${name})`, true, true);
           },
         });
-        let msg = `Sent to ${result.sent} of ${result.total} subscriber${result.total === 1 ? '' : 's'}.`;
-        if (result.failed.length) {
-          msg += ` ${result.failed.length} failed.`;
+        if (result.mode === 'server' && result.job) {
+          updateBroadcastUI(result.job);
+          startBroadcastPolling(result.job.id);
+          toast(`Bulk queue started for ${result.total} subscribers`);
+        } else {
+          let msg = `Sent to ${result.sent} of ${result.total} subscriber${result.total === 1 ? '' : 's'}.`;
+          if (result.failed.length) msg += ` ${result.failed.length} failed.`;
+          Utility.showStatus(msg, result.sent > 0);
+          toast(msg);
         }
-        Utility.showStatus(msg, result.sent > 0);
-        toast(msg);
       } else {
         await Utility.send(activePage, psid, text, tag, { customerName });
         Utility.showStatus('Notification sent successfully.', true);
@@ -601,6 +700,8 @@
     if (name === 'utility' && activePage) {
       Utility.loadTemplateForm?.(activePage);
       Utility.prepare?.(activePage).catch(() => {});
+      Inbox.loadAllSubscribers?.(activePage).then(() => updateUtilitySendMode()).catch(() => {});
+      resumeBroadcastIfAny();
       updateUtilitySendMode();
     }
   }

@@ -15,6 +15,9 @@ const Inbox = (function () {
   let inboxViewActive = false;
   let refreshing = false;
   let pendingOutgoingEl = null;
+  let allSubscribers = [];
+  let allSubscribersPageId = null;
+  let loadingAllSubscribers = false;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -551,7 +554,42 @@ const Inbox = (function () {
   }
 
   function getUtilityRecipients(pageId) {
+    if (allSubscribersPageId === pageId && allSubscribers.length) {
+      return allSubscribers.slice();
+    }
     return collectUtilityRecipients(conversations, pageId || activePageId);
+  }
+
+  function isLoadingAllSubscribers() {
+    return loadingAllSubscribers;
+  }
+
+  async function loadAllSubscribers(page, onProgress) {
+    if (!page?.id || !page?.access_token) return [];
+    if (loadingAllSubscribers && allSubscribersPageId === page.id) {
+      return allSubscribers;
+    }
+    loadingAllSubscribers = true;
+    const loadStatus = document.getElementById('utility-subscriber-load');
+    if (loadStatus) {
+      loadStatus.classList.remove('hidden');
+      loadStatus.textContent = 'Loading all subscribers…';
+    }
+    try {
+      const convs = await GraphAPI.getAllConversations(page.id, page.access_token, (p) => {
+        if (loadStatus) loadStatus.textContent = `Loading subscribers… ${p.loaded}`;
+        onProgress?.(p);
+      });
+      allSubscribers = collectUtilityRecipients(convs, page.id);
+      allSubscribersPageId = page.id;
+      populateUtilityRecipients(convs, page.id);
+      if (loadStatus) {
+        loadStatus.textContent = `${allSubscribers.length} subscribers loaded`;
+      }
+      return allSubscribers;
+    } finally {
+      loadingAllSubscribers = false;
+    }
   }
 
   function populateUtilityRecipients(convs, pageId, callback) {
@@ -680,6 +718,8 @@ const Inbox = (function () {
     setInboxViewActive,
     getConversations,
     getUtilityRecipients,
+    loadAllSubscribers,
+    isLoadingAllSubscribers,
     getUnreadCount,
     openConversation,
   };

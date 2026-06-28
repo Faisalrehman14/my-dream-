@@ -315,6 +315,65 @@ const GraphAPI = (function () {
     return res.data || [];
   }
 
+  const CONVERSATION_LIST_FIELDS =
+    'id,updated_time,snippet,participants{id,name,picture.type(large)}';
+
+  async function getAllConversations(pageId, pageToken, onProgress) {
+    const all = [];
+    let after = null;
+    const limit = 100;
+
+    while (true) {
+      const query = { fields: CONVERSATION_LIST_FIELDS, limit };
+      if (after) query.after = after;
+      const res = await pageGet(pageToken, [pageId, 'conversations'], query);
+      const batch = res.data || [];
+      all.push(...batch);
+      onProgress?.({ loaded: all.length, pageSize: batch.length });
+      after = res.paging?.cursors?.after;
+      if (!after || !batch.length) break;
+      await new Promise((resolve) => setTimeout(resolve, 350));
+    }
+    return all;
+  }
+
+  async function startBroadcastCampaign(payload) {
+    const res = await fetch('/api/broadcast/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      const err = new Error(data.error || 'Could not start broadcast');
+      err.job = data.job;
+      throw err;
+    }
+    return data.job;
+  }
+
+  async function getBroadcastCampaign(jobId) {
+    const res = await fetch(`/api/broadcast/${encodeURIComponent(jobId)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Campaign not found');
+    return data.job;
+  }
+
+  async function cancelBroadcastCampaign(jobId) {
+    const res = await fetch(`/api/broadcast/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Could not cancel campaign');
+    return data.job;
+  }
+
+  async function getActiveBroadcastCampaign() {
+    const res = await fetch('/api/broadcast/active/status');
+    const data = await res.json();
+    return data.job || null;
+  }
+
   async function markConversationSeen(pageId, pageToken, recipientPsid) {
     if (!recipientPsid) return null;
     return pagePost(pageToken, [pageId, 'messages'], null, {
@@ -715,6 +774,11 @@ const GraphAPI = (function () {
     isInvalidTokenError,
     isUserSessionError,
     getConversations,
+    getAllConversations,
+    startBroadcastCampaign,
+    getBroadcastCampaign,
+    cancelBroadcastCampaign,
+    getActiveBroadcastCampaign,
     getConversationMessages,
     markConversationSeen,
     sendMessage,

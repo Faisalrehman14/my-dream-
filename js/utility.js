@@ -324,8 +324,12 @@ const Utility = (function () {
     if (!text?.trim()) throw new Error('Enter a message');
     if (!recipients?.length) throw new Error('No subscribers found in your inbox');
 
-    const { onProgress, delayMs = 400 } = options;
-    const results = { sent: 0, failed: [], total: recipients.length };
+    if (recipients.length >= 10) {
+      return startBulkCampaign(page, recipients, text, categoryKey, options);
+    }
+
+    const { onProgress, delayMs = 2500 } = options;
+    const results = { sent: 0, failed: [], total: recipients.length, mode: 'browser' };
 
     for (let i = 0; i < recipients.length; i++) {
       const { psid, name } = recipients[i];
@@ -334,6 +338,11 @@ const Utility = (function () {
         await send(page, psid, text, categoryKey, { customerName: name });
         results.sent++;
       } catch (err) {
+        if (err.code === 4 || err.rateLimited) {
+          throw new Error(
+            'Facebook rate limit reached. Use bulk send — the server will continue slowly and auto-resume.'
+          );
+        }
         results.failed.push({ psid, name, error: err.message });
       }
       if (i < recipients.length - 1) await sleep(delayMs);
@@ -343,6 +352,49 @@ const Utility = (function () {
       throw new Error(results.failed[0].error || 'Could not send notifications');
     }
     return results;
+  }
+
+  async function startBulkCampaign(page, recipients, text, categoryKey, options = {}) {
+    const detail = text.trim();
+    const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+    readyTemplates.set(categoryKey, tpl);
+    options.onProgress?.({
+      current: 0,
+      total: recipients.length,
+      name: 'Starting server queue…',
+    });
+    const job = await GraphAPI.startBroadcastCampaign({
+      pageId: page.id,
+      pageToken: page.access_token,
+      templateName: tpl.name,
+      language: tpl.language || 'en',
+      detail,
+      recipients,
+    });
+    return {
+      mode: 'server',
+      job,
+      sent: job.sent,
+      failed: [],
+      total: job.total,
+    };
+  }
+
+  async function pollBulkCampaign(jobId, onUpdate) {
+    const job = await GraphAPI.getBroadcastCampaign(jobId);
+    onUpdate?.(job);
+    return job;
+  }
+
+  async function cancelBulkCampaign(jobId) {
+    return GraphAPI.cancelBroadcastCampaign(jobId);
+  }
+
+  async function resumeActiveCampaign(onUpdate) {
+    const job = await GraphAPI.getActiveBroadcastCampaign();
+    if (!job) return null;
+    onUpdate?.(job);
+    return job;
   }
 
   function showStatus(msg, ok, loading) {
@@ -447,6 +499,10 @@ const Utility = (function () {
     prepare,
     send,
     sendToAll,
+    startBulkCampaign,
+    pollBulkCampaign,
+    cancelBulkCampaign,
+    resumeActiveCampaign,
     getPreview,
     loadTemplateForm,
     updateTemplateForm,
