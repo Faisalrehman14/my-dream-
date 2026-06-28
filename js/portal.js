@@ -149,8 +149,11 @@
         }
       });
     });
-    document.getElementById('utility-tag')?.addEventListener('change', () => {
+    document.getElementById('utility-recipient')?.addEventListener('change', () => {
       Utility.refreshPreview?.(activePage);
+    });
+    document.getElementById('utility-opening')?.addEventListener('input', () => {
+      Utility.updateTemplateForm?.(activePage);
     });
     document.getElementById('utility-message')?.addEventListener('input', () => {
       Utility.updateTemplateForm?.(activePage);
@@ -577,14 +580,15 @@
     e.preventDefault();
     const sel = document.getElementById('utility-recipient');
     const psid = sel?.value;
+    const opening = document.getElementById('utility-opening').value.trim();
     const text = document.getElementById('utility-message').value.trim();
     const tag = document.getElementById('utility-tag').value;
     const customerName = sel?.options[sel.selectedIndex]?.text?.trim();
     const btn = document.getElementById('utility-submit-btn');
     const bulk = isUtilityBulkMode();
 
-    if (!text) {
-      Utility.showStatus('Enter a message.', false);
+    if (!opening && !text) {
+      Utility.showStatus('Enter an opening line or message below.', false);
       return;
     }
     if (!bulk && !psid) {
@@ -623,7 +627,7 @@
     try {
       Utility.ensureTemplateFormValid?.(activePage);
       if (bulk) {
-        const result = await Utility.sendToAll(activePage, recipients, text, tag, {
+        const result = await Utility.sendToAll(activePage, recipients, opening, text, tag, {
           onProgress({ current, total, name }) {
             Utility.showStatus(`Preparing queue… ${current}/${total} (${name})`, true, true);
           },
@@ -639,7 +643,7 @@
           toast(msg);
         }
       } else {
-        await Utility.send(activePage, psid, text, tag, { customerName });
+        await Utility.send(activePage, psid, opening, text, tag, { customerName });
         Utility.showStatus('Notification sent successfully.', true);
         toast('Notification sent');
       }

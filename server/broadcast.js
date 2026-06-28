@@ -36,9 +36,34 @@ function publicJob(job) {
   };
 }
 
+function firstName(fullName) {
+  const n = String(fullName || '').trim();
+  if (!n) return '';
+  return n.split(/\s+/)[0];
+}
+
+function composeCustomerMessage(customerName, opening, body) {
+  const first = firstName(customerName);
+  const open = String(opening || '').trim();
+  const main = String(body || '').trim();
+  const lines = [];
+  if (open) {
+    lines.push(first ? `${first} ${open}` : open);
+  } else if (first && main) {
+    lines.push(first);
+  }
+  if (main) lines.push(main);
+  return lines.join('\n').trim();
+}
+
 function validateStartPayload(body) {
-  if (!body?.pageId || !body?.pageToken || !body?.detail?.trim()) {
-    return 'pageId, pageToken, and detail are required';
+  if (!body?.pageId || !body?.pageToken) {
+    return 'pageId and pageToken are required';
+  }
+  const opening = String(body.opening || '').trim();
+  const detail = String(body.detail || '').trim();
+  if (!opening && !detail) {
+    return 'opening or detail is required';
   }
   if (!body.directOnly && !body?.templateName) {
     return 'templateName is required unless directOnly is true';
@@ -64,7 +89,8 @@ function createJob(payload) {
     pageToken: payload.pageToken,
     templateName: payload.templateName || '',
     language: payload.language || 'en',
-    detail: String(payload.detail).trim(),
+    opening: String(payload.opening || '').trim(),
+    detail: String(payload.detail || '').trim(),
     directOnly: Boolean(payload.directOnly),
     recipients: payload.recipients.map((r) => ({
       psid: String(r.psid),
@@ -85,6 +111,7 @@ function createJob(payload) {
 }
 
 async function sendDirect(job, recipient) {
+  const text = composeCustomerMessage(recipient.name, job.opening, job.detail);
   const url =
     `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
     `?access_token=${encodeURIComponent(job.pageToken)}`;
@@ -93,7 +120,7 @@ async function sendDirect(job, recipient) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       recipient: { id: recipient.psid },
-      message: { text: job.detail },
+      message: { text },
     }),
   });
   const data = await res.json();
@@ -106,6 +133,7 @@ async function sendDirect(job, recipient) {
 }
 
 async function sendUtility(job, recipient) {
+  const text = composeCustomerMessage(recipient.name, job.opening, job.detail);
   const url =
     `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
     `?access_token=${encodeURIComponent(job.pageToken)}`;
@@ -122,7 +150,7 @@ async function sendUtility(job, recipient) {
           components: [
             {
               type: 'body',
-              parameters: [{ type: 'text', text: job.detail }],
+              parameters: [{ type: 'text', text }],
             },
           ],
         },
