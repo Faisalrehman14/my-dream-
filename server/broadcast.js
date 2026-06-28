@@ -126,12 +126,92 @@ async function sendDirect(job, recipient) {
   return data;
 }
 
+function templateBodyFromRecord(tpl) {
+  const components = tpl?.components || [];
+  const bodyComp = components.find((c) => String(c.type || '').toUpperCase() === 'BODY');
+  return bodyComp?.text || '';
+}
+
+function hasUnwantedWrapper(body) {
+  const b = String(body || '').toLowerCase();
+  const blocked = [
+    'your account update',
+    'contact us if this was not you',
+    'account update:',
+    'thank you for your order',
+    'good news!',
+    'good news',
+    'your order is now',
+    'order is now',
+    'reminder: your appointment',
+    'your appointment is',
+    'your recent purchase',
+    'shipment tracking',
+  ];
+  return blocked.some((phrase) => b.includes(phrase));
+}
+
+function isExactMessageBody(body) {
+  return String(body || '').trim() === '{{1}}';
+}
+
+async function fetchTemplateByName(pageId, pageToken, name) {
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/message_templates` +
+    `?fields=name,status,language,components&limit=25` +
+    `&name=${encodeURIComponent(name)}` +
+    `&access_token=${encodeURIComponent(pageToken)}`;
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || 'Template lookup failed');
+    err.code = data.error.code;
+    throw err;
+  }
+  const match = (data.data || []).find((t) => t.name === name);
+  if (match?.components?.length) return match;
+  const allUrl =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${pageId}/message_templates` +
+    `?fields=name,status,language,components&limit=100` +
+    `&access_token=${encodeURIComponent(pageToken)}`;
+  const allRes = await fetch(allUrl);
+  const allData = await allRes.json();
+  if (allData.error) {
+    const err = new Error(allData.error.message || 'Template lookup failed');
+    err.code = allData.error.code;
+    throw err;
+  }
+  return (allData.data || []).find((t) => t.name === name) || match || null;
+}
+
+async function assertExactTemplateForSend(pageId, pageToken, templateName) {
+  const tpl = await fetchTemplateByName(pageId, pageToken, templateName);
+  if (!tpl) {
+    throw new Error(
+      `Template "${templateName}" not found on Meta. Open Notifications, wait for v17 setup, start a new bulk send.`
+    );
+  }
+  const body = templateBodyFromRecord(tpl);
+  if (!body) {
+    throw new Error(
+      `Template "${templateName}" has no readable body on Meta. Open Notifications and wait for setup.`
+    );
+  }
+  if (!isExactMessageBody(body) || hasUnwantedWrapper(body)) {
+    throw new Error(
+      `Blocked wrapper template "${templateName}" (body starts: ${body.slice(0, 48)}…). Cancel this bulk job and start a new send after opening Notifications.`
+    );
+  }
+  return tpl;
+}
+
 async function sendUtility(job, recipient) {
   if (!isAllowedUtilityTemplateName(job.templateName)) {
     throw new Error(
       'Blocked library/order template on server. Open Notifications, wait for custom template setup, then start a new bulk send.'
     );
   }
+  await assertExactTemplateForSend(job.pageId, job.pageToken, job.templateName);
   const langs = templateLanguageVariants(job.language);
   let lastErr = null;
   for (const code of langs) {

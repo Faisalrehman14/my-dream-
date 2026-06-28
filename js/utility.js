@@ -1,7 +1,7 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v16';
+  const TEMPLATE_VERSION = 'v17';
 
   /** User text replaces {{1}} — first option is exact message only (best for emoji). */
   const TEMPLATE_BODIES = [
@@ -245,8 +245,7 @@ const Utility = (function () {
   }
 
   async function findPageTemplate(pageId, pageToken, name) {
-    const list = await listPageTemplates(pageId, pageToken);
-    return list.find((t) => t.name === name) || null;
+    return fetchTemplateByName(pageId, pageToken, name);
   }
 
   function isOwnedCustomTemplate(name) {
@@ -258,7 +257,62 @@ const Utility = (function () {
   }
 
   async function listPageTemplates(pageId, pageToken) {
-    return GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+    return listAllPageTemplates(pageId, pageToken);
+  }
+
+  async function listAllPageTemplates(pageId, pageToken) {
+    const all = [];
+    let after = null;
+    for (let page = 0; page < 10; page++) {
+      const query = { limit: 100 };
+      if (after) query.after = after;
+      const res = await GraphAPI.getPageMessageTemplatesPage(pageId, pageToken, query);
+      const batch = res.data || [];
+      all.push(...batch);
+      after = res.paging?.cursors?.after;
+      if (!after || !batch.length) break;
+    }
+    return all;
+  }
+
+  async function fetchTemplateByName(pageId, pageToken, name) {
+    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, {
+      name,
+      limit: 25,
+    });
+    const match = list.find((t) => t.name === name);
+    if (match?.components?.length) return match;
+    const fromAll = (await listAllPageTemplates(pageId, pageToken)).find((t) => t.name === name);
+    return fromAll || match || null;
+  }
+
+  async function loadExactTemplateForSend(pageId, pageToken, name) {
+    const raw = await fetchTemplateByName(pageId, pageToken, name);
+    if (!raw) {
+      const err = new Error('TEMPLATE_NOT_FOUND');
+      err.templateNotFound = true;
+      throw err;
+    }
+    const body = templateBodyFromApi(raw);
+    if (!body) {
+      const err = new Error('TEMPLATE_BODY_MISSING');
+      err.templateBodyMissing = true;
+      throw err;
+    }
+    const norm = normalizeFromApi(raw);
+    assertSafeTemplate(norm);
+    if (!isExactMessageBody(body)) {
+      const err = new Error('NOT_EXACT_TEMPLATE');
+      err.notExact = true;
+      err.templateBody = body;
+      throw err;
+    }
+    if (hasUnwantedWrapper(body)) {
+      const err = new Error('WRAPPER_TEMPLATE');
+      err.wrapperTemplate = true;
+      throw err;
+    }
+    return { raw, norm };
   }
 
   async function findOwnedCustomTemplate(pageId, pageToken) {
@@ -297,8 +351,14 @@ const Utility = (function () {
 
   async function finalizeTemplateRecord(pageId, pageToken, name) {
     for (let i = 0; i < 6; i++) {
-      const fresh = await findPageTemplate(pageId, pageToken, name);
-      if (fresh && isApprovedStatus(fresh.status)) return normalizeFromApi(fresh);
+      const fresh = await fetchTemplateByName(pageId, pageToken, name);
+      if (fresh && isApprovedStatus(fresh.status)) {
+        const body = templateBodyFromApi(fresh);
+        if (!body || hasUnwantedWrapper(body) || !isExactMessageBody(body)) {
+          return null;
+        }
+        return normalizeFromApi(fresh);
+      }
       if (fresh?.status === 'REJECTED') return null;
       if (i < 5) await sleep(1200);
     }
@@ -570,10 +630,15 @@ const Utility = (function () {
   }
 
   async function listLiveSendableTemplates(pageId, pageToken) {
-    const list = await listPageTemplates(pageId, pageToken);
+    const list = await listAllPageTemplates(pageId, pageToken);
     return list
       .filter((t) => isApprovedStatus(t.status))
-      .filter((t) => isOwnedSendableTemplate(normalizeFromApi(t)))
+      .filter((t) => {
+        const body = templateBodyFromApi(t);
+        if (!body) return false;
+        if (!isExactMessageBody(body)) return false;
+        return isOwnedSendableTemplate(normalizeFromApi(t));
+      })
       .sort(
         (a, b) =>
           templatePreferScore(b.name, templateBodyFromApi(b)) -
@@ -583,9 +648,8 @@ const Utility = (function () {
 
   async function resolveExactCustomTemplate(pageId, pageToken) {
     const live = await listLiveSendableTemplates(pageId, pageToken);
-    const exact = live.filter((t) => isExactMessageBody(templateBodyFromApi(t)));
-    if (exact.length) {
-      const verified = await finalizeTemplateRecord(pageId, pageToken, exact[0].name);
+    if (live.length) {
+      const verified = await finalizeTemplateRecord(pageId, pageToken, live[0].name);
       if (verified) {
         assertSafeTemplate(verified);
         return verified;
@@ -602,9 +666,9 @@ const Utility = (function () {
     for (const name of names) {
       try {
         const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-        if (created) {
+        if (created && isExactMessageBody(created.body)) {
           assertSafeTemplate(created);
-          if (isExactMessageBody(created.body)) return created;
+          return created;
         }
       } catch (err) {
         lastError = err;
@@ -612,18 +676,9 @@ const Utility = (function () {
       }
     }
 
-    const fallback = live.find((t) => isAllowedTemplateName(t.name));
-    if (fallback) {
-      const verified = await finalizeTemplateRecord(pageId, pageToken, fallback.name);
-      if (verified) {
-        assertSafeTemplate(verified);
-        return verified;
-      }
-    }
-
     throw new Error(
       (lastError?.message ||
-        'Could not prepare exact-message template. Open Notifications, wait 1–2 min, then retry.') +
+        'Could not create exact-message template ({{1}} only). Open Notifications, wait 1–2 min, then retry.') +
         (lastError?.message?.includes('pages_utility_messaging')
           ? ' Sign out and sign in again — allow all permissions.'
           : '')
@@ -668,16 +723,13 @@ const Utility = (function () {
   }
 
   async function trySendUtilityTemplate(page, psid, msg, rawTemplate) {
-    const body = templateBodyFromApi(rawTemplate);
-    if (hasUnwantedWrapper(body)) {
-      const err = new Error('WRAPPER_TEMPLATE');
-      err.wrapperTemplate = true;
-      throw err;
-    }
-    const norm = normalizeFromApi(rawTemplate);
-    assertSafeTemplate(norm);
+    const { raw, norm } = await loadExactTemplateForSend(
+      page.id,
+      page.access_token,
+      rawTemplate.name
+    );
     const detail = normalizeOutgoingText(msg);
-    const langs = uniqueLanguageCodes(rawTemplate.language);
+    const langs = uniqueLanguageCodes(raw.language);
     let lastErr = null;
     for (const code of langs) {
       try {
@@ -703,23 +755,10 @@ const Utility = (function () {
 
     for (let round = 0; round < 2; round++) {
       let candidates = await listLiveSendableTemplates(page.id, page.access_token);
-      candidates = candidates.filter(
-        (t) => isAllowedTemplateName(t.name) && !hasUnwantedWrapper(templateBodyFromApi(t))
-      );
-      candidates.sort((a, b) => {
-        const exactB = isExactMessageBody(templateBodyFromApi(b)) ? 1 : 0;
-        const exactA = isExactMessageBody(templateBodyFromApi(a)) ? 1 : 0;
-        if (exactB !== exactA) return exactB - exactA;
-        return (
-          templatePreferScore(b.name, templateBodyFromApi(b)) -
-          templatePreferScore(a.name, templateBodyFromApi(a))
-        );
-      });
 
       for (const raw of candidates) {
         try {
           const { result, tpl } = await trySendUtilityTemplate(page, psid, detail, raw);
-          assertSafeTemplate(tpl);
           templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
           readyTemplates.set(categoryKey || 'custom', tpl);
           rememberPreview(page.id, psid, detail);
@@ -727,7 +766,8 @@ const Utility = (function () {
         } catch (err) {
           lastErr = err;
           if (isRateLimitError(err)) throw err;
-          if (err.wrapperTemplate) continue;
+          if (err.wrapperTemplate || err.notExact || err.templateBodyMissing) continue;
+          if (err.templateNotFound) continue;
           if (!isTemplateNotFoundError(err)) throw err;
         }
       }
@@ -745,7 +785,7 @@ const Utility = (function () {
     throw (
       lastErr ||
       new Error(
-        '(#100) Template cannot be found. Open Notifications, wait 1–2 min for setup, then retry.'
+        'No exact-message template ({{1}} only). Open Notifications, wait 1–2 min for setup, then retry.'
       )
     );
   }
@@ -762,7 +802,7 @@ const Utility = (function () {
       try {
         const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
         readyTemplates.set('custom', tpl);
-        showStatus('Ready — type your message and send.', true);
+        showStatus(`Ready — exact template: ${tpl.name}`, true);
       } catch (err) {
         if (isRateLimitError(err)) {
           showStatus(err.message, false);
@@ -878,15 +918,11 @@ const Utility = (function () {
       name: 'Preparing utility template…',
     });
     const tpl = await getVerifiedUtilityTemplate(page, categoryKey);
-    const fresh = await findPageTemplate(page.id, page.access_token, tpl.name);
-    if (!fresh || !isApprovedStatus(fresh.status)) {
-      throw new Error('Utility template not ready yet. Wait 1–2 minutes and try again.');
-    }
-    const verified = normalizeFromApi(fresh);
-    assertSafeTemplate(verified);
-    if (!isAllowedTemplateName(verified.name)) {
-      throw new Error('Wrong template type detected. Open Notifications and wait for setup, then retry.');
-    }
+    const { norm: verified } = await loadExactTemplateForSend(
+      page.id,
+      page.access_token,
+      tpl.name
+    );
     options.onProgress?.({
       current: 0,
       total: recipients.length,

@@ -5,6 +5,7 @@
 require('dotenv').config();
 const express = require('express');
 const crypto = require('crypto');
+const fs = require('fs');
 const path = require('path');
 const { attachMetaCompliance } = require('./meta-compliance');
 const { attachBroadcastRoutes } = require('./broadcast');
@@ -16,9 +17,19 @@ const APP_SECRET = process.env.APP_SECRET || '';
 const FACEBOOK_APP_ID = process.env.FACEBOOK_APP_ID || '';
 const ADMIN_ACCESS_KEY = process.env.ADMIN_ACCESS_KEY || '';
 const APP_NAME = process.env.APP_BRAND_NAME || 'Wayfair';
-const BUILD = process.env.PAGECHAT_BUILD || '20260601-33';
-
 const WEB_ROOT = path.join(__dirname, '..');
+
+function readBuildFromConfig() {
+  try {
+    const configJs = fs.readFileSync(path.join(WEB_ROOT, 'js/config.js'), 'utf8');
+    const match = configJs.match(/PAGECHAT_BUILD\s*=\s*'([^']+)'/);
+    return match?.[1] || 'dev';
+  } catch {
+    return 'dev';
+  }
+}
+
+const BUILD = process.env.PAGECHAT_BUILD || readBuildFromConfig();
 
 /** pageId → timestamp of last webhook message (client polls for instant inbox refresh) */
 const inboxSignals = new Map();
