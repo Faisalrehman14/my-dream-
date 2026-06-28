@@ -141,6 +141,16 @@
     document.querySelectorAll('input[name="utility-send-mode"]').forEach((radio) => {
       radio.addEventListener('change', updateUtilitySendMode);
     });
+    document.getElementById('utility-tag')?.addEventListener('change', () => {
+      Utility.loadTemplateForm?.(activePage);
+      Utility.prepare?.(activePage).catch(() => {});
+    });
+    document.getElementById('utility-custom-text')?.addEventListener('input', () => {
+      Utility.updateTemplateForm?.(activePage);
+    });
+    document.getElementById('utility-body')?.addEventListener('input', () => {
+      Utility.refreshPreview?.(activePage);
+    });
     updateUtilitySendMode();
     document.getElementById('sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('dash-view-all-inbox')?.addEventListener('click', () => switchView('inbox'));
@@ -257,6 +267,7 @@
     updateUtilitySendMode();
     Inbox.startPolling(page);
     updateDashboard();
+    Utility.loadTemplateForm?.(page);
     Utility.prepare?.(page).catch(() => {});
   }
 
@@ -513,6 +524,7 @@
 
     if (btn) btn.disabled = true;
     try {
+      Utility.ensureTemplateFormValid?.(activePage);
       if (bulk) {
         const result = await Utility.sendToAll(activePage, recipients, text, tag, {
           onProgress({ current, total, name }) {
@@ -581,6 +593,7 @@
     if (name === 'settings') refreshPageMeta();
     if (name === 'dashboard') updateDashboard();
     if (name === 'utility' && activePage) {
+      Utility.loadTemplateForm?.(activePage);
       Utility.prepare?.(activePage).catch(() => {});
       updateUtilitySendMode();
     }

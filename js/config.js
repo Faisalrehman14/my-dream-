@@ -43,5 +43,6 @@ const FB_CONFIG = {
     activePageId: 'pagechat_active_page',
     activeConvId: 'pagechat_active_conv',
     utilityPreviews: 'pagechat_utility_previews',
+    utilityTemplates: 'pagechat_utility_templates',
   },
 };

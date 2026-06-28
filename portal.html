@@ -323,10 +323,19 @@
                   </select>
                 </div>
               </div>
+              <div class="portal-form-field" id="utility-template-field">
+                <label for="utility-custom-text">Custom message text</label>
+                <input type="text" id="utility-custom-text" spellcheck="true" autocomplete="off">
+                <p class="form-hint">
+                  Is field mein apna text likhein. Yeh <strong>Reminder: your appointment is</strong> ki jagah use hoga.
+                  Final preview: <em id="utility-template-preview"></em>
+                </p>
+                <p id="utility-template-error" class="form-hint form-hint--err hidden"></p>
+              </div>
               <div class="portal-form-field">
                 <label for="utility-body">Message details</label>
                 <textarea id="utility-body" rows="4" placeholder="scheduled to arrive on 10 May"></textarea>
-                <p class="form-hint">Enter the update detail only — it is inserted into the sentence. Example for shipping: <em>scheduled to arrive on 10 May</em></p>
+                <p class="form-hint" id="utility-body-hint">Enter the update detail only — it is inserted into the sentence. Example for shipping: <em>scheduled to arrive on 10 May</em></p>
               </div>
               <button type="submit" class="btn-primary" id="utility-submit-btn">Send notification</button>
             </form>

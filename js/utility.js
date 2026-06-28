@@ -1,24 +1,27 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v4';
+  const TEMPLATE_VERSION = 'v5';
 
   /** Page-owned Messenger utility templates (auto-approved by Meta). */
   const OWNED_TEMPLATES = {
     POST_PURCHASE_UPDATE: {
-      bodyText: 'Good news! Your order is now {{1}}. Thank you for your order.',
+      prefix: 'Good news! Your order is now',
+      suffix: '. Thank you for your order.',
       example: 'scheduled to arrive on 10 May',
-      preview: 'Good news! Your order is now … Thank you for your order.',
+      detailPlaceholder: 'scheduled to arrive on 10 May',
     },
     CONFIRMED_EVENT_UPDATE: {
-      bodyText: 'Reminder: your appointment is {{1}}.',
+      prefix: 'Reminder: your appointment is',
+      suffix: '.',
       example: 'confirmed for 10 May at 2:00 PM',
-      preview: 'Reminder: your appointment is …',
+      detailPlaceholder: 'confirmed for 10 May at 2:00 PM',
     },
     ACCOUNT_UPDATE: {
-      bodyText: 'Your account update: {{1}}.',
+      prefix: 'Your account update:',
+      suffix: '.',
       example: 'your password was changed successfully',
-      preview: 'Your account update: …',
+      detailPlaceholder: 'your password was changed successfully',
     },
   };
 
@@ -26,12 +29,100 @@ const Utility = (function () {
   let preparePromise = null;
   const readyTemplates = new Map();
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  function getCustomTemplatesState() {
+    try {
+      return JSON.parse(localStorage.getItem(FB_CONFIG.storageKeys.utilityTemplates) || '{}');
+    } catch {
+      return {};
+    }
   }
 
-  function ownedTemplateName(pageId, categoryKey) {
-    return `pagechat_${TEMPLATE_VERSION}_${categoryKey.toLowerCase()}_${String(pageId).slice(-10)}`;
+  function saveCustomTemplatesState(state) {
+    localStorage.setItem(FB_CONFIG.storageKeys.utilityTemplates, JSON.stringify(state));
+  }
+
+  function buildBodyText(prefix, suffix) {
+    return `${String(prefix || '').trim()} {{1}}${suffix || ''}`;
+  }
+
+  function formatTemplatePreview(def, detailExample) {
+    const sample = detailExample || def?.example || '…';
+    return `${def.prefix} ${sample}${def.suffix}`;
+  }
+
+  function getDefaultTemplateDef(categoryKey) {
+    const base = OWNED_TEMPLATES[categoryKey];
+    if (!base) return null;
+    const prefix = base.prefix;
+    const suffix = base.suffix;
+    return {
+      prefix,
+      suffix,
+      bodyText: buildBodyText(prefix, suffix),
+      example: base.example,
+      preview: formatTemplatePreview({ prefix, suffix, example: base.example }),
+    };
+  }
+
+  function getSavedPrefix(pageId, categoryKey) {
+    const state = getCustomTemplatesState()[pageId]?.[categoryKey];
+    if (state?.prefix?.trim()) return state.prefix.trim();
+    if (state?.bodyText?.includes('{{1}}')) {
+      return state.bodyText.split('{{1}}')[0].trim();
+    }
+    return '';
+  }
+
+  function getTemplateDef(categoryKey, pageId) {
+    const base = getDefaultTemplateDef(categoryKey);
+    if (!base) return null;
+    const prefix = getSavedPrefix(pageId, categoryKey) || base.prefix;
+    const suffix = base.suffix;
+    const bodyText = buildBodyText(prefix, suffix);
+    return {
+      prefix,
+      suffix,
+      bodyText,
+      example: base.example,
+      preview: formatTemplatePreview({ prefix, suffix, example: base.example }),
+    };
+  }
+
+  function validateCustomPrefix(prefix) {
+    const text = String(prefix || '').trim();
+    if (!text) return 'Enter your custom message text.';
+    if (text.includes('{{1}}')) return 'Do not type {{1}} — use Message details for that part.';
+    return '';
+  }
+
+  function saveCustomTemplate(pageId, categoryKey, prefix) {
+    const error = validateCustomPrefix(prefix);
+    if (error) throw new Error(error);
+    const text = prefix.trim();
+    const state = getCustomTemplatesState();
+    if (!state[pageId]) state[pageId] = {};
+    state[pageId][categoryKey] = { prefix: text };
+    saveCustomTemplatesState(state);
+    readyTemplates.delete(categoryKey);
+    if (preparedPageId === pageId) preparedPageId = null;
+  }
+
+  function templateHash(bodyText) {
+    let hash = 0;
+    const text = String(bodyText || '');
+    for (let i = 0; i < text.length; i++) {
+      hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    }
+    return Math.abs(hash).toString(36).slice(0, 6);
+  }
+
+  function ownedTemplateName(pageId, categoryKey, bodyText) {
+    const hash = templateHash(bodyText);
+    return `pagechat_${TEMPLATE_VERSION}_${categoryKey.toLowerCase()}_${String(pageId).slice(-10)}_${hash}`;
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   function ownedPayload(name, def) {
@@ -68,10 +159,10 @@ const Utility = (function () {
   }
 
   async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
-    const def = OWNED_TEMPLATES[categoryKey];
+    const def = getTemplateDef(categoryKey, pageId);
     if (!def) throw new Error('Unknown notification type');
 
-    const primaryName = ownedTemplateName(pageId, categoryKey);
+    const primaryName = ownedTemplateName(pageId, categoryKey, def.bodyText);
     let existing = await findPageTemplate(pageId, pageToken, primaryName);
 
     if (existing?.status === 'APPROVED') {
@@ -274,5 +365,95 @@ const Utility = (function () {
     readyTemplates.clear();
   }
 
-  return { prepare, send, sendToAll, getPreview, showStatus, hideStatus, reset };
+  function getActiveCategoryKey() {
+    return document.getElementById('utility-tag')?.value || '';
+  }
+
+  function setTemplateFormError(message) {
+    const el = document.getElementById('utility-template-error');
+    if (!el) return;
+    if (message) {
+      el.textContent = message;
+      el.classList.remove('hidden');
+    } else {
+      el.textContent = '';
+      el.classList.add('hidden');
+    }
+  }
+
+  function updateDetailFieldHints(categoryKey) {
+    const body = document.getElementById('utility-body');
+    const hint = document.getElementById('utility-body-hint');
+    const example = OWNED_TEMPLATES[categoryKey]?.detailPlaceholder;
+    if (body && example) body.placeholder = example;
+    if (hint && example) {
+      hint.innerHTML = `Yeh detail aapke custom text ke baad add hogi. Example: <em>${example}</em>`;
+    }
+  }
+
+  function updateLivePreview(page, categoryKey) {
+    const preview = document.getElementById('utility-template-preview');
+    const detail = document.getElementById('utility-body')?.value?.trim();
+    if (!preview || !page?.id || !categoryKey) return;
+    const def = getTemplateDef(categoryKey, page.id);
+    preview.textContent = formatTemplatePreview(def, detail || def.example);
+  }
+
+  function loadTemplateForm(page) {
+    const categoryKey = getActiveCategoryKey();
+    const input = document.getElementById('utility-custom-text');
+    if (!categoryKey || !input) return;
+
+    const def = getTemplateDef(categoryKey, page?.id);
+    input.value = def?.prefix || '';
+    setTemplateFormError('');
+    updateDetailFieldHints(categoryKey);
+    updateLivePreview(page, categoryKey);
+  }
+
+  function updateTemplateForm(page) {
+    const categoryKey = getActiveCategoryKey();
+    const input = document.getElementById('utility-custom-text');
+    if (!categoryKey || !input || !page?.id) return;
+
+    const prefix = input.value;
+    const error = validateCustomPrefix(prefix);
+    setTemplateFormError(error);
+    updateLivePreview(page, categoryKey);
+
+    if (!error) {
+      try {
+        saveCustomTemplate(page.id, categoryKey, prefix);
+      } catch (err) {
+        setTemplateFormError(err.message);
+      }
+    }
+  }
+
+  function ensureTemplateFormValid(page) {
+    const categoryKey = getActiveCategoryKey();
+    const prefix = document.getElementById('utility-custom-text')?.value || '';
+    const error = validateCustomPrefix(prefix);
+    if (error) throw new Error(error);
+    saveCustomTemplate(page.id, categoryKey, prefix);
+    return getTemplateDef(categoryKey, page.id);
+  }
+
+  function refreshPreview(page) {
+    updateLivePreview(page, getActiveCategoryKey());
+  }
+
+  return {
+    prepare,
+    send,
+    sendToAll,
+    getPreview,
+    loadTemplateForm,
+    updateTemplateForm,
+    refreshPreview,
+    ensureTemplateFormValid,
+    showStatus,
+    hideStatus,
+    reset,
+  };
 })();
