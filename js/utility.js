@@ -3,10 +3,10 @@ const Utility = (function () {
 
   const TEMPLATE_VERSION = 'v9';
 
-  /** Full custom text in {{1}} — no "account update" or other Meta library wrappers. */
+  /** Full custom text in {{1}} — backup when message tags are unavailable. */
   const TEMPLATE_BODIES = [
     {
-      bodyText: '{{1}}',
+      bodyText: 'Message:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
     {
@@ -14,10 +14,16 @@ const Utility = (function () {
       example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: 'Message:\n{{1}}',
+      bodyText: '{{1}}',
       example: 'Are you there? We are here for you.',
     },
   ];
+
+  const MESSAGE_TAGS = new Set([
+    'POST_PURCHASE_UPDATE',
+    'CONFIRMED_EVENT_UPDATE',
+    'ACCOUNT_UPDATE',
+  ]);
 
   const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
 
@@ -260,6 +266,28 @@ const Utility = (function () {
     }
   }
 
+  function resolveMessageTag(categoryKey) {
+    return MESSAGE_TAGS.has(categoryKey) ? categoryKey : 'ACCOUNT_UPDATE';
+  }
+
+  function isRateLimitError(err) {
+    return err?.code === 4 || err?.rateLimited === true;
+  }
+
+  function deliveryErrorMessage(err, fallback) {
+    if (isRateLimitError(err)) {
+      return err.message || 'Facebook rate limit reached. Wait 15–30 minutes, then try once.';
+    }
+    return err?.message || fallback;
+  }
+
+  async function sendWithTag(page, psid, msg, categoryKey) {
+    const tag = resolveMessageTag(categoryKey);
+    const result = await GraphAPI.sendTaggedMessage(page.id, page.access_token, psid, msg, tag);
+    rememberPreview(page.id, psid, msg);
+    return result;
+  }
+
   function isMessagingWindowError(err) {
     const msg = String(err?.message || '').toLowerCase();
     return (
@@ -346,16 +374,29 @@ const Utility = (function () {
         rememberPreview(page.id, psid, msg);
         return result;
       } catch (err) {
+        if (isRateLimitError(err)) throw err;
         if (!isMessagingWindowError(err)) throw err;
+        try {
+          return await sendWithTag(page, psid, msg, categoryKey);
+        } catch (tagErr) {
+          if (isRateLimitError(tagErr)) throw tagErr;
+          if (!isMessagingWindowError(tagErr)) {
+            /* try utility template next */
+          }
+        }
       }
     }
 
     try {
       return await sendViaUtility(page, psid, msg, categoryKey);
     } catch (err) {
+      if (isRateLimitError(err)) throw err;
       if (err.templateOptional) {
         throw new Error(
-          'Could not send right now. Wait 15–30 minutes (Facebook limit) then try again.'
+          deliveryErrorMessage(
+            err,
+            'Could not deliver to this customer. Ask them to message your Page first, then try again.'
+          )
         );
       }
       throw err;
@@ -410,6 +451,7 @@ const Utility = (function () {
       pageToken: page.access_token,
       templateName: tpl?.name || '',
       language: tpl?.language || 'en',
+      messageTag: resolveMessageTag(categoryKey),
       detail,
       directOnly: !tpl,
       recipients,

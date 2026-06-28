@@ -64,6 +64,7 @@ function createJob(payload) {
     pageToken: payload.pageToken,
     templateName: payload.templateName || '',
     language: payload.language || 'en',
+    messageTag: payload.messageTag || 'ACCOUNT_UPDATE',
     detail: String(payload.detail).trim(),
     directOnly: Boolean(payload.directOnly),
     recipients: payload.recipients.map((r) => ({
@@ -82,6 +83,29 @@ function createJob(payload) {
   jobs.set(id, job);
   scheduleProcessor();
   return job;
+}
+
+async function sendTagged(job, recipient) {
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
+    `?access_token=${encodeURIComponent(job.pageToken)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: recipient.psid },
+      messaging_type: 'MESSAGE_TAG',
+      tag: job.messageTag || 'ACCOUNT_UPDATE',
+      message: { text: job.detail },
+    }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || 'Send failed');
+    err.code = data.error.code;
+    throw err;
+  }
+  return data;
 }
 
 async function sendDirect(job, recipient) {
@@ -152,13 +176,25 @@ function isMessagingWindowError(err) {
 
 async function sendOne(job, recipient) {
   if (job.directOnly || !job.templateName) {
-    return sendDirect(job, recipient);
+    try {
+      return await sendDirect(job, recipient);
+    } catch (err) {
+      if (err.code === 4) throw err;
+      if (!isMessagingWindowError(err)) throw err;
+      return sendTagged(job, recipient);
+    }
   }
   try {
     return await sendDirect(job, recipient);
   } catch (err) {
+    if (err.code === 4) throw err;
     if (!isMessagingWindowError(err)) throw err;
-    return sendUtility(job, recipient);
+    try {
+      return await sendTagged(job, recipient);
+    } catch (tagErr) {
+      if (tagErr.code === 4) throw tagErr;
+      return sendUtility(job, recipient);
+    }
   }
 }
 

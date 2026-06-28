@@ -400,6 +400,17 @@ const GraphAPI = (function () {
     return result;
   }
 
+  /** Send plain text outside the 24-hour window using a Meta message tag. */
+  async function sendTaggedMessage(pageId, pageToken, recipientPsid, text, tag) {
+    if (!tag) throw new Error('Notification type is required for this customer');
+    return pagePost(pageToken, [pageId, 'messages'], null, {
+      recipient: { id: recipientPsid },
+      messaging_type: 'MESSAGE_TAG',
+      tag,
+      message: { text },
+    });
+  }
+
   async function getPageMessageTemplates(pageId, pageToken, query = {}) {
     const res = await pageGet(pageToken, [pageId, 'message_templates'], {
       limit: 100,
@@ -782,6 +793,7 @@ const GraphAPI = (function () {
     getConversationMessages,
     markConversationSeen,
     sendMessage,
+    sendTaggedMessage,
     getPageMessageTemplates,
     createPageUtilityTemplate,
     searchUtilityTemplateLibrary,
