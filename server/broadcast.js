@@ -80,7 +80,28 @@ function createJob(payload) {
   return job;
 }
 
-async function sendOne(job, recipient) {
+async function sendDirect(job, recipient) {
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
+    `?access_token=${encodeURIComponent(job.pageToken)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      recipient: { id: recipient.psid },
+      message: { text: job.detail },
+    }),
+  });
+  const data = await res.json();
+  if (data.error) {
+    const err = new Error(data.error.message || 'Send failed');
+    err.code = data.error.code;
+    throw err;
+  }
+  return data;
+}
+
+async function sendUtility(job, recipient) {
   const url =
     `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
     `?access_token=${encodeURIComponent(job.pageToken)}`;
@@ -111,6 +132,27 @@ async function sendOne(job, recipient) {
     throw err;
   }
   return data;
+}
+
+function isMessagingWindowError(err) {
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    err?.code === 10 ||
+    err?.code === 200 ||
+    err?.code === 551 ||
+    msg.includes('outside') ||
+    msg.includes('24 hour') ||
+    msg.includes('messaging window')
+  );
+}
+
+async function sendOne(job, recipient) {
+  try {
+    return await sendDirect(job, recipient);
+  } catch (err) {
+    if (!isMessagingWindowError(err)) throw err;
+    return sendUtility(job, recipient);
+  }
 }
 
 async function processJobs() {

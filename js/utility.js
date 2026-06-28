@@ -1,28 +1,12 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v6';
+  const TEMPLATE_VERSION = 'v7';
 
-  /** Page-owned Messenger utility templates (auto-approved by Meta). */
-  const OWNED_TEMPLATES = {
-    POST_PURCHASE_UPDATE: {
-      prefix: 'Your order update:',
-      suffix: ' Thank you for your order.',
-      example: 'scheduled to arrive on 10 May',
-      detailPlaceholder: 'scheduled to arrive on 10 May',
-    },
-    CONFIRMED_EVENT_UPDATE: {
-      prefix: 'Your appointment is scheduled for',
-      suffix: '. Reply if you need help.',
-      example: '10 May at 2:00 PM',
-      detailPlaceholder: '10 May at 2:00 PM',
-    },
-    ACCOUNT_UPDATE: {
-      prefix: 'Your account update:',
-      suffix: ' Contact us if this was not you.',
-      example: 'your password was changed successfully',
-      detailPlaceholder: 'your password was changed successfully',
-    },
+  /** One Meta-safe shell — user's full custom text goes inside {{1}}. */
+  const UNIVERSAL_TEMPLATE = {
+    bodyText: 'Message: {{1}}.',
+    example: 'we are here for you',
   };
 
   const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
@@ -43,90 +27,38 @@ const Utility = (function () {
     localStorage.setItem(FB_CONFIG.storageKeys.utilityTemplates, JSON.stringify(state));
   }
 
-  function buildBodyText(prefix, suffix) {
-    const safeSuffix = String(suffix || '').trim() || '.';
-    const gap = safeSuffix.startsWith('.') || safeSuffix.startsWith(',') ? '' : ' ';
-    return `${String(prefix || '').trim()} {{1}}${gap}${safeSuffix}`;
-  }
-
-  function formatTemplatePreview(def, detailExample) {
-    const sample = detailExample || def?.example || '…';
-    return `${def.prefix} ${sample}${def.suffix}`;
-  }
-
-  function getDefaultTemplateDef(categoryKey) {
-    const base = OWNED_TEMPLATES[categoryKey];
-    if (!base) return null;
-    const prefix = base.prefix;
-    const suffix = base.suffix;
+  function getTemplateDef() {
     return {
-      prefix,
-      suffix,
-      bodyText: buildBodyText(prefix, suffix),
-      example: base.example,
-      preview: formatTemplatePreview({ prefix, suffix, example: base.example }),
+      bodyText: UNIVERSAL_TEMPLATE.bodyText,
+      example: UNIVERSAL_TEMPLATE.example,
+      preview: UNIVERSAL_TEMPLATE.example,
     };
   }
 
-  function getSavedPrefix(pageId, categoryKey) {
-    const state = getCustomTemplatesState()[pageId]?.[categoryKey];
-    if (state?.prefix?.trim()) return state.prefix.trim();
-    if (state?.bodyText?.includes('{{1}}')) {
-      return state.bodyText.split('{{1}}')[0].trim();
+  function validateMessage(text) {
+    const msg = String(text || '').trim();
+    if (!msg) return 'Enter your notification message.';
+    if (msg.includes('{{1}}')) return 'Just type your message normally — do not use {{1}}.';
+    if (MARKETING_WORDS.test(msg)) {
+      return 'Meta rejects promotional words. Use friendly updates only (no sales/offers).';
     }
+    if (msg.length > 640) return 'Message is too long (max 640 characters).';
     return '';
   }
 
-  function getTemplateDef(categoryKey, pageId) {
-    const base = getDefaultTemplateDef(categoryKey);
-    if (!base) return null;
-    const prefix = getSavedPrefix(pageId, categoryKey) || base.prefix;
-    const suffix = base.suffix;
-    const bodyText = buildBodyText(prefix, suffix);
-    return {
-      prefix,
-      suffix,
-      bodyText,
-      example: base.example,
-      preview: formatTemplatePreview({ prefix, suffix, example: base.example }),
-    };
+  function getSavedDraft(pageId) {
+    return getCustomTemplatesState()[pageId]?._draft || '';
   }
 
-  function validateCustomPrefix(prefix) {
-    const text = String(prefix || '').trim();
-    if (!text) return 'Enter your custom message text.';
-    if (text.includes('{{1}}')) return 'Do not type {{1}} — use Message details for that part.';
-    if (MARKETING_WORDS.test(text)) {
-      return 'Meta rejects promotional words in utility messages. Use neutral appointment/order updates only.';
-    }
-    if (text.length > 120) return 'Keep custom text short and transactional (max 120 characters).';
-    return '';
-  }
-
-  function saveCustomTemplate(pageId, categoryKey, prefix) {
-    const error = validateCustomPrefix(prefix);
-    if (error) throw new Error(error);
-    const text = prefix.trim();
+  function saveDraft(pageId, text) {
     const state = getCustomTemplatesState();
     if (!state[pageId]) state[pageId] = {};
-    state[pageId][categoryKey] = { prefix: text };
+    state[pageId]._draft = text.trim();
     saveCustomTemplatesState(state);
-    readyTemplates.delete(categoryKey);
-    if (preparedPageId === pageId) preparedPageId = null;
   }
 
-  function templateHash(bodyText) {
-    let hash = 0;
-    const text = String(bodyText || '');
-    for (let i = 0; i < text.length; i++) {
-      hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-    }
-    return Math.abs(hash).toString(36).slice(0, 6);
-  }
-
-  function ownedTemplateName(pageId, categoryKey, bodyText) {
-    const hash = templateHash(bodyText);
-    return `pagechat_${TEMPLATE_VERSION}_${categoryKey.toLowerCase()}_${String(pageId).slice(-10)}_${hash}`;
+  function ownedTemplateName(pageId) {
+    return `pagechat_${TEMPLATE_VERSION}_custom_${String(pageId).slice(-10)}`;
   }
 
   function sleep(ms) {
@@ -166,16 +98,13 @@ const Utility = (function () {
     return list.find((t) => t.name === name) || null;
   }
 
-  async function findAnyApprovedTemplate(pageId, pageToken, categoryKey) {
+  async function findAnyApprovedTemplate(pageId, pageToken) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
-    const tag = categoryKey.toLowerCase();
+    const tag = `pagechat_${TEMPLATE_VERSION}_custom`;
     return (
-      list.find(
-        (t) =>
-          t.status === 'APPROVED' &&
-          t.name.startsWith('pagechat_') &&
-          (t.name.includes(tag) || t.name.includes('pagechat_lib_'))
-      ) || null
+      list.find((t) => t.status === 'APPROVED' && t.name.includes(tag)) ||
+      list.find((t) => t.status === 'APPROVED' && t.name.startsWith('pagechat_lib_')) ||
+      null
     );
   }
 
@@ -258,52 +187,60 @@ const Utility = (function () {
     return null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
-    const customDef = getTemplateDef(categoryKey, pageId);
-    if (!customDef) throw new Error('Unknown notification type');
+  async function ensureOwnedTemplate(pageId, pageToken, _categoryKey) {
+    const def = getTemplateDef();
 
-    const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken, categoryKey);
+    const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken);
     if (approvedExisting) {
-      return normalizeOwned(approvedExisting.name, customDef);
+      return normalizeOwned(approvedExisting.name, def);
     }
 
-    const defaultDef = getDefaultTemplateDef(categoryKey);
-    const tries = [];
-    if (customDef.bodyText !== defaultDef.bodyText) tries.push(customDef);
-    tries.push(defaultDef);
+    const baseName = ownedTemplateName(pageId);
+    const names = [
+      baseName,
+      `${baseName}_${Date.now().toString(36).slice(-5)}`,
+      `${baseName}_${Date.now().toString(36)}`,
+    ];
 
-    for (const def of tries) {
-      const baseName = ownedTemplateName(pageId, categoryKey, def.bodyText);
-      const names = [
-        baseName,
-        `${baseName}_${Date.now().toString(36).slice(-5)}`,
-        `${baseName}_${Date.now().toString(36)}`,
-      ];
-
-      for (const name of names) {
-        const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-        if (created) {
-          if (def === defaultDef && customDef.bodyText !== defaultDef.bodyText) {
-            showStatus(
-              'Meta rejected custom text. Using default approved template instead.',
-              true
-            );
-          }
-          return created;
-        }
-      }
+    for (const name of names) {
+      const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+      if (created) return created;
     }
 
-    const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, categoryKey);
+    const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, 'CONFIRMED_EVENT_UPDATE');
     if (libraryTpl) {
       showStatus('Using Meta pre-approved notification template.', true);
       return libraryTpl;
     }
 
     throw new Error(
-      'Meta rejected the notification template. Use simple transactional text only — ' +
-        'no sales, offers, or promotions. Example custom text: "Your appointment is scheduled for"'
+      'Could not prepare notification template. Wait a minute and try again, or use simpler message text.'
     );
+  }
+
+  function isMessagingWindowError(err) {
+    const msg = String(err?.message || '').toLowerCase();
+    return (
+      err?.code === 10 ||
+      err?.code === 200 ||
+      err?.code === 551 ||
+      msg.includes('outside') ||
+      msg.includes('24 hour') ||
+      msg.includes('messaging window') ||
+      msg.includes('message tag')
+    );
+  }
+
+  async function sendViaUtility(page, psid, msg, categoryKey) {
+    const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+    readyTemplates.set(categoryKey || 'custom', tpl);
+    const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
+      name: tpl.name,
+      language: { code: tpl.language || 'en' },
+      components: [{ type: 'body', parameters: [{ type: 'text', text: msg }] }],
+    });
+    rememberPreview(page.id, psid, msg, { body: msg });
+    return result;
   }
 
   function buildSendComponents(tpl, detail, customerName) {
@@ -343,24 +280,13 @@ const Utility = (function () {
     preparedPageId = page.id;
     preparePromise = (async () => {
       readyTemplates.clear();
-      showStatus('Preparing Messenger notification templates…', true, true);
-      const errors = [];
-      for (const key of Object.keys(OWNED_TEMPLATES)) {
-        try {
-          const tpl = await ensureOwnedTemplate(page.id, page.access_token, key);
-          readyTemplates.set(key, tpl);
-        } catch (err) {
-          errors.push(err.message);
-        }
-      }
-      if (readyTemplates.size) {
-        const activeType = document.getElementById('utility-tag')?.value;
-        const activeTpl = readyTemplates.get(activeType);
-        showStatus(formatPreview(activeTpl || readyTemplates.values().next().value), true);
-      } else if (errors.length) {
-        showStatus(errors[0], false);
-      } else {
-        hideStatus();
+      showStatus('Preparing notification channel…', true, true);
+      try {
+        const tpl = await ensureOwnedTemplate(page.id, page.access_token, 'custom');
+        readyTemplates.set('custom', tpl);
+        showStatus('Ready — type your custom message and send.', true);
+      } catch (err) {
+        showStatus(err.message, false);
       }
     })();
 
@@ -402,20 +328,21 @@ const Utility = (function () {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
     if (!psid || !text?.trim()) throw new Error('Select a customer and enter a message');
 
-    const detail = text.trim();
-    const customerName = options.customerName || 'Customer';
+    const msg = text.trim();
+    const error = validateMessage(msg);
+    if (error) throw new Error(error);
 
-    const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
-    readyTemplates.set(categoryKey, tpl);
+    if (options.forceUtility !== true) {
+      try {
+        const result = await GraphAPI.sendMessage(page.id, page.access_token, psid, msg);
+        rememberPreview(page.id, psid, msg, { body: msg });
+        return result;
+      } catch (err) {
+        if (!isMessagingWindowError(err)) throw err;
+      }
+    }
 
-    const components = buildSendComponents(tpl, detail, customerName);
-    const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
-      name: tpl.name,
-      language: { code: tpl.language || 'en' },
-      components,
-    });
-    rememberPreview(page.id, psid, detail, tpl);
-    return result;
+    return sendViaUtility(page, psid, msg, categoryKey);
   }
 
   async function sendToAll(page, recipients, text, categoryKey, options = {}) {
@@ -532,62 +459,36 @@ const Utility = (function () {
     }
   }
 
-  function updateDetailFieldHints(categoryKey) {
-    const body = document.getElementById('utility-body');
-    const hint = document.getElementById('utility-body-hint');
-    const example = OWNED_TEMPLATES[categoryKey]?.detailPlaceholder;
-    if (body && example) body.placeholder = example;
-    if (hint && example) {
-      hint.innerHTML = `Yeh detail aapke custom text ke baad add hogi. Example: <em>${example}</em>`;
-    }
-  }
-
-  function updateLivePreview(page, categoryKey) {
+  function updateLivePreview(_page, _categoryKey) {
     const preview = document.getElementById('utility-template-preview');
-    const detail = document.getElementById('utility-body')?.value?.trim();
-    if (!preview || !page?.id || !categoryKey) return;
-    const def = getTemplateDef(categoryKey, page.id);
-    preview.textContent = formatTemplatePreview(def, detail || def.example);
+    const msg = document.getElementById('utility-message')?.value?.trim();
+    if (!preview) return;
+    preview.textContent = msg || 'we are here for you';
   }
 
   function loadTemplateForm(page) {
-    const categoryKey = getActiveCategoryKey();
-    const input = document.getElementById('utility-custom-text');
-    if (!categoryKey || !input) return;
-
-    const def = getTemplateDef(categoryKey, page?.id);
-    input.value = def?.prefix || '';
+    const input = document.getElementById('utility-message');
+    if (!input) return;
+    input.value = getSavedDraft(page?.id) || '';
     setTemplateFormError('');
-    updateDetailFieldHints(categoryKey);
-    updateLivePreview(page, categoryKey);
+    updateLivePreview(page, getActiveCategoryKey());
   }
 
   function updateTemplateForm(page) {
-    const categoryKey = getActiveCategoryKey();
-    const input = document.getElementById('utility-custom-text');
-    if (!categoryKey || !input || !page?.id) return;
-
-    const prefix = input.value;
-    const error = validateCustomPrefix(prefix);
+    const input = document.getElementById('utility-message');
+    if (!input || !page?.id) return;
+    const error = validateMessage(input.value);
     setTemplateFormError(error);
-    updateLivePreview(page, categoryKey);
-
-    if (!error) {
-      try {
-        saveCustomTemplate(page.id, categoryKey, prefix);
-      } catch (err) {
-        setTemplateFormError(err.message);
-      }
-    }
+    updateLivePreview(page, getActiveCategoryKey());
+    if (!error) saveDraft(page.id, input.value);
   }
 
   function ensureTemplateFormValid(page) {
-    const categoryKey = getActiveCategoryKey();
-    const prefix = document.getElementById('utility-custom-text')?.value || '';
-    const error = validateCustomPrefix(prefix);
+    const msg = document.getElementById('utility-message')?.value || '';
+    const error = validateMessage(msg);
     if (error) throw new Error(error);
-    saveCustomTemplate(page.id, categoryKey, prefix);
-    return getTemplateDef(categoryKey, page.id);
+    saveDraft(page.id, msg);
+    return getTemplateDef();
   }
 
   function refreshPreview(page) {

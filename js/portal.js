@@ -150,14 +150,10 @@
       });
     });
     document.getElementById('utility-tag')?.addEventListener('change', () => {
-      Utility.loadTemplateForm?.(activePage);
-      Utility.prepare?.(activePage).catch(() => {});
-    });
-    document.getElementById('utility-custom-text')?.addEventListener('input', () => {
-      Utility.updateTemplateForm?.(activePage);
-    });
-    document.getElementById('utility-body')?.addEventListener('input', () => {
       Utility.refreshPreview?.(activePage);
+    });
+    document.getElementById('utility-message')?.addEventListener('input', () => {
+      Utility.updateTemplateForm?.(activePage);
     });
     updateUtilitySendMode();
     document.getElementById('broadcast-cancel-btn')?.addEventListener('click', onCancelBroadcast);
@@ -581,7 +577,7 @@
     e.preventDefault();
     const sel = document.getElementById('utility-recipient');
     const psid = sel?.value;
-    const text = document.getElementById('utility-body').value.trim();
+    const text = document.getElementById('utility-message').value.trim();
     const tag = document.getElementById('utility-tag').value;
     const customerName = sel?.options[sel.selectedIndex]?.text?.trim();
     const btn = document.getElementById('utility-submit-btn');

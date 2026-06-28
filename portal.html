@@ -325,20 +325,15 @@
                   </select>
                 </div>
               </div>
-              <div class="portal-form-field" id="utility-template-field">
-                <label for="utility-custom-text">Custom message text</label>
-                <input type="text" id="utility-custom-text" spellcheck="true" autocomplete="off">
-                <p class="form-hint">
-                  Is field mein apna text likhein. Yeh default ki jagah use hoga.
-                  Use simple transactional words only (no sales/offers — Meta rejects those).
-                  Final preview: <em id="utility-template-preview"></em>
-                </p>
-                <p id="utility-template-error" class="form-hint form-hint--err hidden"></p>
-              </div>
               <div class="portal-form-field">
-                <label for="utility-body">Message details</label>
-                <textarea id="utility-body" rows="4" placeholder="scheduled to arrive on 10 May"></textarea>
-                <p class="form-hint" id="utility-body-hint">Enter the update detail only — it is inserted into the sentence. Example for shipping: <em>scheduled to arrive on 10 May</em></p>
+                <label for="utility-message">Your notification message</label>
+                <textarea id="utility-message" rows="5" spellcheck="true" placeholder="are you there honey"></textarea>
+                <p class="form-hint">
+                  Customer ko <strong>yahi exact message</strong> jayega — koi extra sentence nahi jodega.
+                  Example: <em>we are here for you</em>
+                </p>
+                <p class="form-hint">Preview: <em id="utility-template-preview"></em></p>
+                <p id="utility-template-error" class="form-hint form-hint--err hidden"></p>
               </div>
               <button type="submit" class="btn-primary" id="utility-submit-btn">Send notification</button>
             </form>
