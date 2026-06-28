@@ -414,6 +414,7 @@ const GraphAPI = (function () {
   async function getPageMessageTemplates(pageId, pageToken, query = {}) {
     const res = await pageGet(pageToken, [pageId, 'message_templates'], {
       limit: 100,
+      fields: 'name,status,language,category,components',
       ...query,
     });
     return res.data || [];

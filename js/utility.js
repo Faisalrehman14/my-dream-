@@ -1,20 +1,20 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v10';
+  const TEMPLATE_VERSION = 'v11';
 
   /** User's full custom text goes in {{1}}. */
   const TEMPLATE_BODIES = [
+    {
+      bodyText: 'Hello,\n\n{{1}}\n\nThank you.',
+      example: 'Are you there? We are here for you.',
+    },
     {
       bodyText: 'Message:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: 'Are you there? We are here for you.',
-    },
-    {
-      bodyText: 'Notification:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
   ];
@@ -56,10 +56,30 @@ const Utility = (function () {
   }
 
   function templateLanguageCode(lang) {
-    const raw = String(lang || 'en').trim();
-    if (!raw) return 'en';
+    const raw = String(lang || 'en_US').trim();
+    if (!raw) return 'en_US';
     if (raw.includes('_')) return raw;
-    return raw.length === 2 ? raw : 'en';
+    return raw.length === 2 ? `${raw}_US` : 'en_US';
+  }
+
+  function isApprovedStatus(status) {
+    return String(status || '').toUpperCase() === 'APPROVED';
+  }
+
+  function normalizeFromApi(tpl) {
+    const components = tpl?.components || [];
+    const bodyComp = components.find((c) => String(c.type || '').toUpperCase() === 'BODY');
+    const body = bodyComp?.text || '';
+    return {
+      name: tpl.name,
+      language: templateLanguageCode(tpl.language),
+      status: 'APPROVED',
+      body,
+      preview: body.replace(/\{\{1\}\}/g, '…') || 'Notification',
+      bodyParamCount: 1,
+      paramRoles: ['detail'],
+      buttons: [],
+    };
   }
 
   function normalizeTemplateRecord(name, language, def) {
@@ -108,7 +128,7 @@ const Utility = (function () {
   function ownedPayload(name, def) {
     return {
       name,
-      language: 'en',
+      language: 'en_US',
       category: 'UTILITY',
       components: [
         {
@@ -118,6 +138,25 @@ const Utility = (function () {
         },
       ],
     };
+  }
+
+  async function findAnyApprovedUtility(pageId, pageToken) {
+    const list = await listPageTemplates(pageId, pageToken);
+    const approved = list.filter((t) => isApprovedStatus(t.status));
+    if (!approved.length) return null;
+
+    const score = (t) => {
+      const n = String(t.name || '');
+      if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) return 100;
+      if (isOwnedCustomTemplate(n)) return 90;
+      if (n.startsWith('pagechat_lib_')) return 85;
+      if (n.startsWith('pagechat_')) return 75;
+      if (String(t.category || '').toUpperCase() === 'UTILITY') return 50;
+      return 20;
+    };
+
+    approved.sort((a, b) => score(b) - score(a));
+    return approved[0];
   }
 
   async function findPageTemplate(pageId, pageToken, name) {
@@ -139,7 +178,7 @@ const Utility = (function () {
 
   async function findOwnedCustomTemplate(pageId, pageToken) {
     const list = await listPageTemplates(pageId, pageToken);
-    const owned = list.filter((t) => t.status === 'APPROVED' && isOwnedCustomTemplate(t.name));
+    const owned = list.filter((t) => isApprovedStatus(t.status) && isOwnedCustomTemplate(t.name));
     return (
       owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
       owned.sort((a, b) => String(b.name).localeCompare(String(a.name)))[0] ||
@@ -152,10 +191,10 @@ const Utility = (function () {
       .toLowerCase()
       .slice(0, 14)}_${String(pageId).slice(-8)}`;
     const tpl = await findPageTemplate(pageId, pageToken, cloneName);
-    return tpl?.status === 'APPROVED' ? tpl : null;
+    return tpl?.status && isApprovedStatus(tpl.status) ? tpl : null;
   }
 
-  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 10) {
+  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 15) {
     for (let i = 0; i < attempts; i++) {
       await sleep(1000 + i * 800);
       const tpl = await findPageTemplate(pageId, pageToken, name);
@@ -194,15 +233,96 @@ const Utility = (function () {
       }
     } catch (err) {
       if (err.code === 4 || err.rateLimited) throw err;
+      throw err;
     }
     return null;
+  }
+
+  function libraryButtonInputs(pick) {
+    const buttons =
+      pick?.buttons ||
+      pick?.components?.find((c) => String(c.type || '').toUpperCase() === 'BUTTONS')?.buttons ||
+      [];
+    if (!buttons.length) return null;
+    return JSON.stringify(
+      buttons.map((btn) => {
+        const type = String(btn.type || '').toUpperCase();
+        if (type === 'URL' || type === 'WEB_URL') {
+          return {
+            type: 'URL',
+            url: {
+              base_url: 'https://www.example.com/{{1}}',
+              url_suffix_example: 'https://www.example.com/support',
+            },
+          };
+        }
+        if (type === 'PHONE_NUMBER') {
+          return { type: 'PHONE_NUMBER', phone_number: '+10000000000' };
+        }
+        return { type: 'QUICK_REPLY', text: 'OK' };
+      })
+    );
+  }
+
+  function buildLibraryClonePayload(cloneName, pick) {
+    const payload = {
+      name: cloneName,
+      category: 'UTILITY',
+      language: templateLanguageCode(pick.language || 'en_US'),
+      library_template_name: pick.name,
+    };
+    const btnInputs = libraryButtonInputs(pick);
+    if (btnInputs) payload.library_template_button_inputs = btnInputs;
+    return payload;
+  }
+
+  async function browseUtilityLibrary(pageToken) {
+    const collected = [];
+    const seen = new Set();
+    const add = (list) => {
+      for (const t of list || []) {
+        if (t?.name && !seen.has(t.name)) {
+          seen.add(t.name);
+          collected.push(t);
+        }
+      }
+    };
+    try {
+      add(await GraphAPI.searchUtilityTemplateLibrary(pageToken, { limit: 50 }));
+    } catch {
+      /* ignore */
+    }
+    for (const q of ['hello', 'update', 'order', 'delivery', 'account', 'appointment', 'message']) {
+      try {
+        add(
+          await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
+            name_or_content: q,
+            language: 'en',
+            limit: 25,
+          })
+        );
+      } catch {
+        /* ignore */
+      }
+    }
+    return collected;
+  }
+
+  function pickLibraryTemplate(list) {
+    if (!list?.length) return null;
+    return [...list].sort((a, b) => {
+      const btnA = (a.buttons || []).length;
+      const btnB = (b.buttons || []).length;
+      if (btnA !== btnB) return btnA - btnB;
+      return String(a.name || '').length - String(b.name || '').length;
+    })[0];
   }
 
   function normalizeLibraryTemplate(name, libTpl) {
     const body = libTpl?.body || libTpl?.components?.[0]?.text || 'Message:\n{{1}}';
     return {
       name,
-      language: templateLanguageCode(libTpl?.language || 'en'),
+      language: templateLanguageCode(libTpl?.language || 'en_US'),
       status: 'APPROVED',
       body,
       preview: body.replace(/\{\{1\}\}/g, '…'),
@@ -213,64 +333,72 @@ const Utility = (function () {
   }
 
   async function tryMetaLibraryTemplate(pageId, pageToken, categoryKey) {
-    const search = {
-      POST_PURCHASE_UPDATE: 'order delivery',
-      CONFIRMED_EVENT_UPDATE: 'appointment reminder',
-      ACCOUNT_UPDATE: 'account update',
-    };
-    const query = search[categoryKey];
-    if (!query) return null;
-
     const existing = await findApprovedLibClone(pageId, pageToken, categoryKey);
     if (existing) {
-      return normalizeLibraryTemplate(existing.name, existing);
+      return normalizeFromApi(existing);
     }
 
-    let libList = [];
-    try {
-      libList = await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
-        name_or_content: query,
-        language: 'en',
-      });
-    } catch {
-      return null;
-    }
-
+    const libList = await browseUtilityLibrary(pageToken);
+    const searchHint = {
+      POST_PURCHASE_UPDATE: /order|delivery|ship|purchase/i,
+      CONFIRMED_EVENT_UPDATE: /appointment|event|remind|confirm/i,
+      ACCOUNT_UPDATE: /account|profile|update/i,
+    };
+    const hint = searchHint[categoryKey];
     const pick =
-      (libList || []).find((t) => t.category === 'UTILITY') || (libList || [])[0];
+      (hint ? libList.find((t) => hint.test(String(t.name || '') + String(t.body || ''))) : null) ||
+      pickLibraryTemplate(libList);
     if (!pick?.name) return null;
 
     const cloneName = `pagechat_lib_${categoryKey.toLowerCase().slice(0, 14)}_${String(pageId).slice(-8)}`;
-    const pending = await findPageTemplate(pageId, pageToken, cloneName);
+    let pending = await findPageTemplate(pageId, pageToken, cloneName);
     if (pending?.status === 'APPROVED') {
-      return normalizeLibraryTemplate(cloneName, pick);
+      return normalizeFromApi(pending);
     }
-
-    if (pending?.status !== 'REJECTED' && pending?.status !== 'PENDING') {
+    if (pending?.status === 'PENDING') {
+      pending = await waitForTemplateApproval(pageId, pageToken, cloneName);
+      if (pending?.status === 'APPROVED') return normalizeFromApi(pending);
+      if (pending?.status === 'PENDING') return null;
+    }
+    if (pending?.status === 'REJECTED') {
+      const altName = `${cloneName}_${Date.now().toString(36).slice(-4)}`;
+      pending = null;
       try {
-        await GraphAPI.cloneUtilityLibraryTemplate(pageId, pageToken, {
-          name: cloneName,
-          category: 'UTILITY',
-          language: pick.language || 'en_US',
-          library_template_name: pick.name,
-        });
+        await GraphAPI.cloneUtilityLibraryTemplate(
+          pageId,
+          pageToken,
+          buildLibraryClonePayload(altName, pick)
+        );
+        const approved = await waitForTemplateApproval(pageId, pageToken, altName);
+        if (approved?.status === 'APPROVED') return normalizeFromApi(approved);
       } catch (err) {
         if (err.code === 4 || err.rateLimited) throw err;
-        return null;
       }
+      return null;
+    }
+
+    try {
+      await GraphAPI.cloneUtilityLibraryTemplate(
+        pageId,
+        pageToken,
+        buildLibraryClonePayload(cloneName, pick)
+      );
+    } catch (err) {
+      if (err.code === 4 || err.rateLimited) throw err;
+      throw err;
     }
 
     const approved = await waitForTemplateApproval(pageId, pageToken, cloneName);
     if (approved?.status === 'APPROVED') {
-      return normalizeLibraryTemplate(cloneName, pick);
+      return normalizeFromApi(approved);
     }
     return null;
   }
 
   async function ensureUtilityTemplate(pageId, pageToken, categoryKey) {
-    const owned = await findOwnedCustomTemplate(pageId, pageToken);
-    if (owned) {
-      return normalizeTemplateRecord(owned.name, owned.language, getTemplateDef());
+    const anyApproved = await findAnyApprovedUtility(pageId, pageToken);
+    if (anyApproved) {
+      return normalizeFromApi(anyApproved);
     }
 
     let lastError = null;
@@ -308,17 +436,19 @@ const Utility = (function () {
       }
     }
 
+    const hint = lastError?.message?.includes('pages_utility_messaging')
+      ? ' Sign out and sign in again — allow all permissions.'
+      : '';
     throw new Error(
-      lastError?.message ||
-        'Could not prepare an approved utility template. Wait a few minutes and try again.'
+      (lastError?.message ||
+        'Could not prepare an approved utility template. Wait a few minutes and try again.') + hint
     );
   }
 
   async function getUtilityTemplate(page, categoryKey) {
     const cacheKey = `${page.id}:${categoryKey || 'any'}`;
     if (templateCache.has(cacheKey)) {
-      const cached = templateCache.get(cacheKey);
-      if (cached) return cached;
+      return templateCache.get(cacheKey);
     }
     const tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
     templateCache.set(cacheKey, tpl);
@@ -354,7 +484,7 @@ const Utility = (function () {
     readyTemplates.set(categoryKey || 'custom', tpl);
     const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
       name: tpl.name,
-      language: { code: tpl.language || 'en' },
+      language: { code: tpl.language || 'en_US' },
       components: [{ type: 'body', parameters: [{ type: 'text', text: msg }] }],
     });
     rememberPreview(page.id, psid, msg);
@@ -369,7 +499,7 @@ const Utility = (function () {
     preparePromise = (async () => {
       readyTemplates.clear();
       clearTemplateCache(page.id);
-      showStatus('Preparing utility template for Meta…', true, true);
+      showStatus('Preparing Meta utility template (may take 1–2 min)…', true, true);
       try {
         const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
         readyTemplates.set('custom', tpl);
@@ -498,7 +628,7 @@ const Utility = (function () {
       pageId: page.id,
       pageToken: page.access_token,
       templateName: tpl.name,
-      language: tpl.language || 'en',
+      language: tpl.language || 'en_US',
       detail,
       directOnly: false,
       recipients,
