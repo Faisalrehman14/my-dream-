@@ -673,8 +673,8 @@
     }
     const count = Inbox.getReplyableCount?.(activePage.id) || 0;
     el.textContent = count
-      ? `${count} can-reply customer${count === 1 ? '' : 's'} in inbox — click to download .txt (Meta can_reply only).`
-      : 'Click Download to scan inbox and export only customers you can reply to.';
+      ? `${count} can-reply thread${count === 1 ? '' : 's'} — download .txt with selected_item_id&thread_type=FB_MESSAGE lines.`
+      : 'Click Download to scan inbox and export Business Suite thread IDs you can reply to.';
     if (btn) btn.disabled = false;
   }
 

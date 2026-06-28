@@ -560,17 +560,23 @@ const Inbox = (function () {
     return list;
   }
 
+  function formatInboxThreadExportLine(selectedItemId) {
+    return `selected_item_id=${selectedItemId}&thread_type=FB_MESSAGE`;
+  }
+
   function collectReplyableRecipients(convs, pageId) {
     const seen = new Set();
     const list = [];
     convs.forEach((c) => {
       if (!isCanReplyConversation(c)) return;
+      const selectedItemId = GraphAPI.extractInboxSelectedItemId(c, pageId);
+      if (!selectedItemId || seen.has(selectedItemId)) return;
+      seen.add(selectedItemId);
       const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
-      if (!cust?.id || seen.has(cust.id)) return;
-      seen.add(cust.id);
       list.push({
-        psid: cust.id,
-        name: cust.name || cust.email || cust.id,
+        psid: cust?.id || selectedItemId,
+        selectedItemId,
+        name: cust?.name || cust?.email || selectedItemId,
       });
     });
     return list;
@@ -603,12 +609,13 @@ const Inbox = (function () {
         'No can-reply customers found. Meta inbox mein jahan reply blocked/done/spam ho, woh list mein nahi aate.'
       );
     }
-    const content = recipients.map((r) => r.psid).join('\n') + '\n';
+    const content =
+      recipients.map((r) => formatInboxThreadExportLine(r.selectedItemId || r.psid)).join('\n') + '\n';
     const safeName = String(page.name || 'page')
       .replace(/[^\w.-]+/g, '_')
       .slice(0, 40);
     const date = new Date().toISOString().slice(0, 10);
-    const filename = `${safeName}-can-reply-ids-${date}.txt`;
+    const filename = `${safeName}-can-reply-inbox-threads-${date}.txt`;
     triggerTextDownload(filename, content);
     return { count: recipients.length, filename };
   }

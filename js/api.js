@@ -329,7 +329,7 @@ const GraphAPI = (function () {
   async function getConversations(pageId, pageToken) {
     const res = await pageGet(pageToken, [pageId, 'conversations', 'inbox'], {
       fields:
-        'id,updated_time,snippet,unread_count,message_count,can_reply,' +
+        'id,updated_time,snippet,unread_count,message_count,can_reply,link,' +
         'participants{id,name,picture.type(large)},' +
         'messages.limit(1){id,message,from,created_time,attachments{type,mime_type,name,payload,generic_template{title,subtitle}}}',
       limit: 50,
@@ -338,7 +338,7 @@ const GraphAPI = (function () {
   }
 
   const CONVERSATION_LIST_FIELDS =
-    'id,updated_time,snippet,can_reply,participants{id,name,picture.type(large)}';
+    'id,updated_time,snippet,can_reply,link,participants{id,name,picture.type(large)}';
 
   async function getAllConversations(pageId, pageToken, onProgress) {
     return fetchConversationPages(pageId, pageToken, [pageId, 'conversations'], onProgress);
@@ -802,6 +802,19 @@ const GraphAPI = (function () {
     return customer || parts[0] || null;
   }
 
+  /** Business Suite inbox URL uses selected_item_id (from Meta link, else customer PSID). */
+  function extractInboxSelectedItemId(conv, pageId) {
+    const link = String(conv?.link || '').trim();
+    if (link) {
+      const qMatch = link.match(/[?&](?:selected_item_id|threadid)=([^&]+)/i);
+      if (qMatch?.[1]) return decodeURIComponent(qMatch[1]);
+      const pathMatch = link.match(/\/inbox\/(\d+)/i);
+      if (pathMatch?.[1]) return pathMatch[1];
+    }
+    const cust = extractCustomerFromConversation(conv, pageId);
+    return cust?.id ? String(cust.id) : null;
+  }
+
   // Legacy wrappers for page-meta.js (path string style)
   function pageGetPath(pageToken, pathWithQuery) {
     const { segments, query } = parsePathWithQuery(pathWithQuery);
@@ -862,6 +875,7 @@ const GraphAPI = (function () {
     hasEngagementPermission,
     isEngagementError,
     extractCustomerFromConversation,
+    extractInboxSelectedItemId,
     pageGet: pageGetPath,
     pagePost: pagePostPath,
     pageDelete: pageDeletePath,
