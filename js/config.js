@@ -3,7 +3,7 @@
  * Or paste your App ID below (replace empty string).
  */
 /** Bump when deploying — busts browser cache for JS/CSS */
-const PAGECHAT_BUILD = '20260628-10';
+const PAGECHAT_BUILD = '20260628-11';
 
 /** Meta app + product branding (admin & App Review) */
 const APP_BRAND = {

@@ -150,6 +150,8 @@
       });
     });
     document.getElementById('utility-tag')?.addEventListener('change', () => {
+      Utility.reset?.();
+      Utility.prepare?.(activePage).catch(() => {});
       Utility.refreshPreview?.(activePage);
     });
     document.getElementById('utility-message')?.addEventListener('input', () => {

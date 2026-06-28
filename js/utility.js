@@ -1,9 +1,9 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v9';
+  const TEMPLATE_VERSION = 'v10';
 
-  /** Full custom text in {{1}} — backup when message tags are unavailable. */
+  /** User's full custom text goes in {{1}}. */
   const TEMPLATE_BODIES = [
     {
       bodyText: 'Message:\n{{1}}',
@@ -14,19 +14,18 @@ const Utility = (function () {
       example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: '{{1}}',
+      bodyText: 'Notification:\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
   ];
 
-  const MESSAGE_TAGS = new Set([
-    'POST_PURCHASE_UPDATE',
+  const LIBRARY_FALLBACK_KEYS = [
     'CONFIRMED_EVENT_UPDATE',
+    'POST_PURCHASE_UPDATE',
     'ACCOUNT_UPDATE',
-    'HUMAN_AGENT',
-  ]);
+  ];
 
-  /** pageId -> template object, or false when none available (avoid repeat API calls) */
+  /** pageId -> template object, or false when lookup failed */
   const templateCache = new Map();
 
   const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
@@ -53,6 +52,26 @@ const Utility = (function () {
       bodyText: body.bodyText,
       example: body.example,
       preview: body.example,
+    };
+  }
+
+  function templateLanguageCode(lang) {
+    const raw = String(lang || 'en').trim();
+    if (!raw) return 'en';
+    if (raw.includes('_')) return raw;
+    return raw.length === 2 ? raw : 'en';
+  }
+
+  function normalizeTemplateRecord(name, language, def) {
+    return {
+      name,
+      language: templateLanguageCode(language),
+      status: 'APPROVED',
+      body: def?.bodyText || '',
+      preview: def?.preview || '',
+      bodyParamCount: 1,
+      paramRoles: ['detail'],
+      buttons: [],
     };
   }
 
@@ -101,19 +120,6 @@ const Utility = (function () {
     };
   }
 
-  function normalizeOwned(pageName, def) {
-    return {
-      name: pageName,
-      language: 'en',
-      status: 'APPROVED',
-      body: def.bodyText,
-      preview: def.preview,
-      bodyParamCount: 1,
-      paramRoles: ['detail'],
-      buttons: [],
-    };
-  }
-
   async function findPageTemplate(pageId, pageToken, name) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { name });
     return list.find((t) => t.name === name) || null;
@@ -127,8 +133,12 @@ const Utility = (function () {
     );
   }
 
+  async function listPageTemplates(pageId, pageToken) {
+    return GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+  }
+
   async function findOwnedCustomTemplate(pageId, pageToken) {
-    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+    const list = await listPageTemplates(pageId, pageToken);
     const owned = list.filter((t) => t.status === 'APPROVED' && isOwnedCustomTemplate(t.name));
     return (
       owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
@@ -137,9 +147,17 @@ const Utility = (function () {
     );
   }
 
-  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 8) {
+  async function findApprovedLibClone(pageId, pageToken, categoryKey) {
+    const cloneName = `pagechat_lib_${String(categoryKey || '')
+      .toLowerCase()
+      .slice(0, 14)}_${String(pageId).slice(-8)}`;
+    const tpl = await findPageTemplate(pageId, pageToken, cloneName);
+    return tpl?.status === 'APPROVED' ? tpl : null;
+  }
+
+  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 10) {
     for (let i = 0; i < attempts; i++) {
-      await sleep(1000 + i * 700);
+      await sleep(1000 + i * 800);
       const tpl = await findPageTemplate(pageId, pageToken, name);
       if (tpl?.status === 'APPROVED') return tpl;
       if (tpl?.status === 'REJECTED') return tpl;
@@ -149,10 +167,14 @@ const Utility = (function () {
 
   async function tryCreateOwnedTemplate(pageId, pageToken, def, name) {
     let existing = await findPageTemplate(pageId, pageToken, name);
-    if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
+    if (existing?.status === 'APPROVED') {
+      return normalizeTemplateRecord(name, existing.language, def);
+    }
     if (existing?.status === 'PENDING') {
       existing = await waitForTemplateApproval(pageId, pageToken, name);
-      if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
+      if (existing?.status === 'APPROVED') {
+        return normalizeTemplateRecord(name, existing.language, def);
+      }
       if (existing?.status === 'PENDING') return null;
     }
     if (existing?.status === 'REJECTED') return null;
@@ -163,21 +185,24 @@ const Utility = (function () {
         pageToken,
         ownedPayload(name, def)
       );
-      if (created?.status === 'APPROVED') return normalizeOwned(name, def);
+      if (created?.status === 'APPROVED') {
+        return normalizeTemplateRecord(name, created.language, def);
+      }
       const result = await waitForTemplateApproval(pageId, pageToken, name);
-      if (result?.status === 'APPROVED') return normalizeOwned(name, def);
+      if (result?.status === 'APPROVED') {
+        return normalizeTemplateRecord(name, result.language, def);
+      }
     } catch (err) {
       if (err.code === 4 || err.rateLimited) throw err;
-      return null;
     }
     return null;
   }
 
   function normalizeLibraryTemplate(name, libTpl) {
-    const body = libTpl?.body || 'Your update: {{1}}. Thank you.';
+    const body = libTpl?.body || libTpl?.components?.[0]?.text || 'Message:\n{{1}}';
     return {
       name,
-      language: String(libTpl?.language || 'en').replace('_US', '').slice(0, 2) || 'en',
+      language: templateLanguageCode(libTpl?.language || 'en'),
       status: 'APPROVED',
       body,
       preview: body.replace(/\{\{1\}\}/g, '…'),
@@ -196,6 +221,11 @@ const Utility = (function () {
     const query = search[categoryKey];
     if (!query) return null;
 
+    const existing = await findApprovedLibClone(pageId, pageToken, categoryKey);
+    if (existing) {
+      return normalizeLibraryTemplate(existing.name, existing);
+    }
+
     let libList = [];
     try {
       libList = await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
@@ -211,10 +241,12 @@ const Utility = (function () {
     if (!pick?.name) return null;
 
     const cloneName = `pagechat_lib_${categoryKey.toLowerCase().slice(0, 14)}_${String(pageId).slice(-8)}`;
-    const existing = await findPageTemplate(pageId, pageToken, cloneName);
-    if (existing?.status === 'APPROVED') return normalizeLibraryTemplate(cloneName, pick);
+    const pending = await findPageTemplate(pageId, pageToken, cloneName);
+    if (pending?.status === 'APPROVED') {
+      return normalizeLibraryTemplate(cloneName, pick);
+    }
 
-    if (existing?.status !== 'REJECTED' && existing?.status !== 'PENDING') {
+    if (pending?.status !== 'REJECTED' && pending?.status !== 'PENDING') {
       try {
         await GraphAPI.cloneUtilityLibraryTemplate(pageId, pageToken, {
           name: cloneName,
@@ -222,20 +254,23 @@ const Utility = (function () {
           language: pick.language || 'en_US',
           library_template_name: pick.name,
         });
-      } catch {
+      } catch (err) {
+        if (err.code === 4 || err.rateLimited) throw err;
         return null;
       }
     }
 
     const approved = await waitForTemplateApproval(pageId, pageToken, cloneName);
-    if (approved?.status === 'APPROVED') return normalizeLibraryTemplate(cloneName, pick);
+    if (approved?.status === 'APPROVED') {
+      return normalizeLibraryTemplate(cloneName, pick);
+    }
     return null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, _categoryKey) {
-    const approvedExisting = await findOwnedCustomTemplate(pageId, pageToken);
-    if (approvedExisting) {
-      return normalizeOwned(approvedExisting.name, getTemplateDef());
+  async function ensureUtilityTemplate(pageId, pageToken, categoryKey) {
+    const owned = await findOwnedCustomTemplate(pageId, pageToken);
+    if (owned) {
+      return normalizeTemplateRecord(owned.name, owned.language, getTemplateDef());
     }
 
     let lastError = null;
@@ -257,70 +292,47 @@ const Utility = (function () {
       }
     }
 
-    const err = new Error(
-      lastError?.message || 'No utility template is approved on this Page yet.'
+    const libOrder = [
+      categoryKey,
+      ...LIBRARY_FALLBACK_KEYS.filter((k) => k !== categoryKey),
+    ].filter(Boolean);
+
+    for (const key of libOrder) {
+      if (!LIBRARY_FALLBACK_KEYS.includes(key)) continue;
+      try {
+        const libTpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
+        if (libTpl) return libTpl;
+      } catch (err) {
+        lastError = err;
+        if (err.code === 4 || err.rateLimited) throw err;
+      }
+    }
+
+    throw new Error(
+      lastError?.message ||
+        'Could not prepare an approved utility template. Wait a few minutes and try again.'
     );
-    err.templateOptional = true;
-    throw err;
   }
 
-  async function getTemplateIfAvailable(page, categoryKey) {
+  async function getUtilityTemplate(page, categoryKey) {
     const cacheKey = `${page.id}:${categoryKey || 'any'}`;
     if (templateCache.has(cacheKey)) {
       const cached = templateCache.get(cacheKey);
-      return cached || null;
+      if (cached) return cached;
     }
-    try {
-      const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
-      templateCache.set(cacheKey, tpl);
-      return tpl;
-    } catch (err) {
-      if (err.templateOptional || err.code === 4) {
-        templateCache.set(cacheKey, false);
-        return null;
-      }
-      throw err;
-    }
+    const tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+    templateCache.set(cacheKey, tpl);
+    return tpl;
   }
 
-  function resolveMessageTag(categoryKey) {
-    return MESSAGE_TAGS.has(categoryKey) ? categoryKey : 'ACCOUNT_UPDATE';
+  function clearTemplateCache(pageId) {
+    for (const key of [...templateCache.keys()]) {
+      if (key.startsWith(`${pageId}:`)) templateCache.delete(key);
+    }
   }
 
   function isRateLimitError(err) {
     return err?.code === 4 || err?.rateLimited === true;
-  }
-
-  function deliveryErrorMessage(err, fallback) {
-    if (isRateLimitError(err)) {
-      return err.message || 'Facebook rate limit reached. Wait 15–30 minutes, then try once.';
-    }
-    return err?.message || fallback;
-  }
-
-  async function sendWithAnyTag(page, psid, msg, categoryKey) {
-    const tags = [
-      resolveMessageTag(categoryKey),
-      'HUMAN_AGENT',
-      'CONFIRMED_EVENT_UPDATE',
-      'POST_PURCHASE_UPDATE',
-      'ACCOUNT_UPDATE',
-    ];
-    const tried = new Set();
-    let lastErr = null;
-    for (const tag of tags) {
-      if (tried.has(tag)) continue;
-      tried.add(tag);
-      try {
-        const result = await GraphAPI.sendTaggedMessage(page.id, page.access_token, psid, msg, tag);
-        rememberPreview(page.id, psid, msg);
-        return result;
-      } catch (err) {
-        lastErr = err;
-        if (isRateLimitError(err)) throw err;
-      }
-    }
-    throw lastErr || new Error('Could not send with message tags');
   }
 
   function isMessagingWindowError(err) {
@@ -332,17 +344,13 @@ const Utility = (function () {
       msg.includes('outside') ||
       msg.includes('24 hour') ||
       msg.includes('messaging window') ||
-      msg.includes('message tag')
+      msg.includes('utility template') ||
+      msg.includes('utility message')
     );
   }
 
   async function sendViaUtility(page, psid, msg, categoryKey) {
-    const tpl = await getTemplateIfAvailable(page, categoryKey);
-    if (!tpl) {
-      const err = new Error('No utility template is approved on this Page yet.');
-      err.templateOptional = true;
-      throw err;
-    }
+    const tpl = await getUtilityTemplate(page, categoryKey);
     readyTemplates.set(categoryKey || 'custom', tpl);
     const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
       name: tpl.name,
@@ -353,11 +361,6 @@ const Utility = (function () {
     return result;
   }
 
-  function formatPreview(tpl) {
-    if (!tpl?.preview) return 'Templates ready. You can send notifications.';
-    return `Template ready: "${tpl.preview}"`;
-  }
-
   async function prepare(page) {
     if (!page?.id || !page?.access_token) return;
     if (preparePromise && preparedPageId === page.id) return preparePromise;
@@ -365,7 +368,22 @@ const Utility = (function () {
     preparedPageId = page.id;
     preparePromise = (async () => {
       readyTemplates.clear();
-      showStatus('Ready — type your message and send.', true);
+      clearTemplateCache(page.id);
+      showStatus('Preparing utility template for Meta…', true, true);
+      try {
+        const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
+        readyTemplates.set('custom', tpl);
+        showStatus('Ready — type your message and send.', true);
+      } catch (err) {
+        if (isRateLimitError(err)) {
+          showStatus(err.message, false);
+        } else {
+          showStatus(
+            'Template will be created when you send. Type your message and tap Send.',
+            true
+          );
+        }
+      }
     })();
 
     try {
@@ -408,37 +426,23 @@ const Utility = (function () {
     const error = validateMessage(msg);
     if (error) throw new Error(error);
 
-    let lastDeliveryErr = null;
-
     if (options.forceUtility !== true) {
       try {
         const result = await GraphAPI.sendMessage(page.id, page.access_token, psid, msg);
         rememberPreview(page.id, psid, msg);
         return result;
       } catch (err) {
-        lastDeliveryErr = err;
         if (isRateLimitError(err)) throw err;
         if (!isMessagingWindowError(err)) throw err;
-        try {
-          return await sendWithAnyTag(page, psid, msg, categoryKey);
-        } catch (tagErr) {
-          lastDeliveryErr = tagErr;
-          if (isRateLimitError(tagErr)) throw tagErr;
-        }
       }
     }
 
     try {
       return await sendViaUtility(page, psid, msg, categoryKey);
     } catch (err) {
+      clearTemplateCache(page.id);
       if (isRateLimitError(err)) throw err;
-      const root = lastDeliveryErr || err;
-      throw new Error(
-        deliveryErrorMessage(
-          root,
-          'Could not deliver. Ask the customer to message your Page first, then try again.'
-        )
-      );
+      throw err;
     }
   }
 
@@ -461,7 +465,7 @@ const Utility = (function () {
         await send(page, psid, text, categoryKey, { customerName: name });
         results.sent++;
       } catch (err) {
-        if (err.code === 4 || err.rateLimited) {
+        if (isRateLimitError(err)) {
           throw new Error(
             'Facebook rate limit reached. Use bulk send — the server will continue slowly and auto-resume.'
           );
@@ -479,7 +483,12 @@ const Utility = (function () {
 
   async function startBulkCampaign(page, recipients, text, categoryKey, options = {}) {
     const detail = text.trim();
-    const tpl = await getTemplateIfAvailable(page, categoryKey);
+    options.onProgress?.({
+      current: 0,
+      total: recipients.length,
+      name: 'Preparing utility template…',
+    });
+    const tpl = await getUtilityTemplate(page, categoryKey);
     options.onProgress?.({
       current: 0,
       total: recipients.length,
@@ -488,11 +497,10 @@ const Utility = (function () {
     const job = await GraphAPI.startBroadcastCampaign({
       pageId: page.id,
       pageToken: page.access_token,
-      templateName: tpl?.name || '',
-      language: tpl?.language || 'en',
-      messageTag: resolveMessageTag(categoryKey),
+      templateName: tpl.name,
+      language: tpl.language || 'en',
       detail,
-      directOnly: !tpl,
+      directOnly: false,
       recipients,
     });
     return {

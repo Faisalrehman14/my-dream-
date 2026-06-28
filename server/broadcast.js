@@ -64,7 +64,6 @@ function createJob(payload) {
     pageToken: payload.pageToken,
     templateName: payload.templateName || '',
     language: payload.language || 'en',
-    messageTag: payload.messageTag || 'ACCOUNT_UPDATE',
     detail: String(payload.detail).trim(),
     directOnly: Boolean(payload.directOnly),
     recipients: payload.recipients.map((r) => ({
@@ -83,52 +82,6 @@ function createJob(payload) {
   jobs.set(id, job);
   scheduleProcessor();
   return job;
-}
-
-async function sendTagged(job, recipient, tag) {
-  const url =
-    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
-    `?access_token=${encodeURIComponent(job.pageToken)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      recipient: { id: recipient.psid },
-      messaging_type: 'MESSAGE_TAG',
-      tag: tag || job.messageTag || 'ACCOUNT_UPDATE',
-      message: { text: job.detail },
-    }),
-  });
-  const data = await res.json();
-  if (data.error) {
-    const err = new Error(data.error.message || 'Send failed');
-    err.code = data.error.code;
-    throw err;
-  }
-  return data;
-}
-
-async function sendWithAnyTag(job, recipient) {
-  const tags = [
-    job.messageTag || 'ACCOUNT_UPDATE',
-    'HUMAN_AGENT',
-    'CONFIRMED_EVENT_UPDATE',
-    'POST_PURCHASE_UPDATE',
-    'ACCOUNT_UPDATE',
-  ];
-  const tried = new Set();
-  let lastErr = null;
-  for (const tag of tags) {
-    if (tried.has(tag)) continue;
-    tried.add(tag);
-    try {
-      return await sendTagged(job, recipient, tag);
-    } catch (err) {
-      lastErr = err;
-      if (err.code === 4) throw err;
-    }
-  }
-  throw lastErr || new Error('Could not send with message tags');
 }
 
 async function sendDirect(job, recipient) {
@@ -193,32 +146,24 @@ function isMessagingWindowError(err) {
     err?.code === 551 ||
     msg.includes('outside') ||
     msg.includes('24 hour') ||
-    msg.includes('messaging window')
+    msg.includes('messaging window') ||
+    msg.includes('utility template') ||
+    msg.includes('utility message')
   );
 }
 
 async function sendOne(job, recipient) {
-  if (job.directOnly || !job.templateName) {
-    try {
-      return await sendDirect(job, recipient);
-    } catch (err) {
-      if (err.code === 4) throw err;
-      if (!isMessagingWindowError(err)) throw err;
-      return sendWithAnyTag(job, recipient);
-    }
-  }
   try {
     return await sendDirect(job, recipient);
   } catch (err) {
     if (err.code === 4) throw err;
     if (!isMessagingWindowError(err)) throw err;
-    try {
-      return await sendWithAnyTag(job, recipient);
-    } catch (tagErr) {
-      if (tagErr.code === 4) throw tagErr;
-      if (job.directOnly || !job.templateName) throw tagErr;
-      return sendUtility(job, recipient);
+    if (!job.templateName) {
+      throw new Error(
+        'No utility template on this Page. Open Notifications while logged in, wait for template setup, then retry bulk send.'
+      );
     }
+    return sendUtility(job, recipient);
   }
 }
 
