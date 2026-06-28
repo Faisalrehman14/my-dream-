@@ -159,6 +159,7 @@
     });
     updateUtilitySendMode();
     document.getElementById('broadcast-cancel-btn')?.addEventListener('click', onCancelBroadcast);
+    document.getElementById('btn-download-subscriber-ids')?.addEventListener('click', onDownloadSubscriberIds);
     document.getElementById('sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('dash-view-all-inbox')?.addEventListener('click', () => switchView('inbox'));
 
@@ -281,6 +282,7 @@
     Inbox.startPolling(page);
     updateDashboard();
     Utility.loadTemplateForm?.(page);
+    updateSubscriberExportStatus();
   }
 
   function updateTopbarPage(page) {
@@ -655,6 +657,48 @@
     }
   }
 
+  function updateSubscriberExportStatus(loadingText) {
+    const el = document.getElementById('subscriber-export-status');
+    const btn = document.getElementById('btn-download-subscriber-ids');
+    if (!el) return;
+    if (!activePage) {
+      el.textContent = 'Select a Page to export subscriber IDs.';
+      if (btn) btn.disabled = true;
+      return;
+    }
+    if (loadingText) {
+      el.textContent = loadingText;
+      if (btn) btn.disabled = true;
+      return;
+    }
+    const count = Inbox.getSubscriberCount?.(activePage.id) || 0;
+    el.textContent = count
+      ? `${count} subscriber${count === 1 ? '' : 's'} ready — click to download .txt file (one ID per line).`
+      : 'No subscribers loaded yet — click Download to fetch all customer IDs from Messenger.';
+    if (btn) btn.disabled = false;
+  }
+
+  async function onDownloadSubscriberIds() {
+    if (!activePage) {
+      toast('Select a Page first', true);
+      return;
+    }
+    const btn = document.getElementById('btn-download-subscriber-ids');
+    try {
+      updateSubscriberExportStatus('Loading all subscribers from Messenger…');
+      const result = await Inbox.downloadSubscriberIdsFile(activePage, (p) => {
+        updateSubscriberExportStatus(`Loading subscribers… ${p.loaded || 0}`);
+      });
+      toast(`Downloaded ${result.count} subscriber ID${result.count === 1 ? '' : 's'}`);
+      updateSubscriberExportStatus();
+    } catch (e) {
+      toast(e.message, true);
+      updateSubscriberExportStatus();
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   function handleInvalidSession(err) {
     if (!err?.userSessionInvalid) return false;
     Inbox.stopPolling();
@@ -694,7 +738,15 @@
       Inbox.setInboxViewActive?.(false);
       if (live) live.classList.add('hidden');
     }
-    if (name === 'settings') refreshPageMeta();
+    if (name === 'settings') {
+      refreshPageMeta();
+      updateSubscriberExportStatus();
+      if (activePage) {
+        Inbox.loadAllSubscribers?.(activePage)
+          .then(() => updateSubscriberExportStatus())
+          .catch(() => updateSubscriberExportStatus());
+      }
+    }
     if (name === 'dashboard') updateDashboard();
     if (name === 'utility' && activePage) {
       Utility.loadTemplateForm?.(activePage);

@@ -560,6 +560,41 @@ const Inbox = (function () {
     return collectUtilityRecipients(conversations, pageId || activePageId);
   }
 
+  function triggerTextDownload(filename, content) {
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 500);
+  }
+
+  async function downloadSubscriberIdsFile(page, onProgress) {
+    if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
+    let recipients = getUtilityRecipients(page.id);
+    if (!recipients.length || allSubscribersPageId !== page.id) {
+      recipients = await loadAllSubscribers(page, onProgress);
+    }
+    if (!recipients.length) {
+      throw new Error('No subscribers found. Customers must message your Page first.');
+    }
+    const content = recipients.map((r) => r.psid).join('\n') + '\n';
+    const safeName = String(page.name || 'page')
+      .replace(/[^\w.-]+/g, '_')
+      .slice(0, 40);
+    const date = new Date().toISOString().slice(0, 10);
+    const filename = `${safeName}-subscriber-ids-${date}.txt`;
+    triggerTextDownload(filename, content);
+    return { count: recipients.length, filename };
+  }
+
+  function getSubscriberCount(pageId) {
+    return getUtilityRecipients(pageId).length;
+  }
+
   function isLoadingAllSubscribers() {
     return loadingAllSubscribers;
   }
@@ -718,6 +753,8 @@ const Inbox = (function () {
     setInboxViewActive,
     getConversations,
     getUtilityRecipients,
+    getSubscriberCount,
+    downloadSubscriberIdsFile,
     loadAllSubscribers,
     isLoadingAllSubscribers,
     getUnreadCount,
