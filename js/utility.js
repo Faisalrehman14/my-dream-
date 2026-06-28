@@ -3,6 +3,9 @@ const Utility = (function () {
 
   const TEMPLATE_VERSION = 'v18';
 
+  /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
+  const wrapperCleanupDone = new Map();
+
   /** User text replaces {{1}} — first option is exact message only (best for emoji). */
   const TEMPLATE_BODIES = [
     {
@@ -129,18 +132,24 @@ const Utility = (function () {
     return String(body || '').trim() === '{{1}}';
   }
 
-  async function cleanupWrapperTemplatesFromPage(pageId, pageToken) {
+  async function cleanupWrapperTemplatesFromPage(pageId, pageToken, force = false) {
+    if (!force && wrapperCleanupDone.get(pageId)) return 0;
+
     const all = await listAllPageTemplates(pageId, pageToken);
     let removed = 0;
+    const seen = new Set();
     for (const tpl of all) {
-      if (!tpl?.id || !isWrapperTemplateRecord(tpl)) continue;
+      const name = String(tpl?.name || '').trim();
+      if (!name || seen.has(name) || !isWrapperTemplateRecord(tpl)) continue;
+      seen.add(name);
       try {
-        await GraphAPI.deletePageMessageTemplate(pageToken, tpl.id);
+        await GraphAPI.deletePageMessageTemplate(pageId, pageToken, name, tpl.id);
         removed++;
       } catch (err) {
         if (err.code === 4 || err.rateLimited) throw err;
       }
     }
+    wrapperCleanupDone.set(pageId, true);
     if (removed) await sleep(1500);
     return removed;
   }
@@ -723,6 +732,7 @@ const Utility = (function () {
     for (const key of [...templateCache.keys()]) {
       if (key.startsWith(`${pageId}:`)) templateCache.delete(key);
     }
+    if (pageId) wrapperCleanupDone.delete(pageId);
   }
 
   function isRateLimitError(err) {
