@@ -106,36 +106,64 @@ async function sendDirect(job, recipient) {
 }
 
 async function sendUtility(job, recipient) {
-  const url =
-    `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
-    `?access_token=${encodeURIComponent(job.pageToken)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      recipient: { id: recipient.psid },
-      messaging_type: 'UTILITY',
-      message: {
-        template: {
-          name: job.templateName,
-          language: { code: job.language },
-          components: [
-            {
-              type: 'body',
-              parameters: [{ type: 'text', text: job.detail }],
-            },
-          ],
+  const langs = templateLanguageVariants(job.language);
+  let lastErr = null;
+  for (const code of langs) {
+    const url =
+      `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
+      `?access_token=${encodeURIComponent(job.pageToken)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        recipient: { id: recipient.psid },
+        messaging_type: 'UTILITY',
+        message: {
+          template: {
+            name: job.templateName,
+            language: { code },
+            components: [
+              {
+                type: 'body',
+                parameters: [{ type: 'text', text: job.detail }],
+              },
+            ],
+          },
         },
-      },
-    }),
-  });
-  const data = await res.json();
-  if (data.error) {
+      }),
+    });
+    const data = await res.json();
+    if (!data.error) return data;
     const err = new Error(data.error.message || 'Send failed');
     err.code = data.error.code;
-    throw err;
+    lastErr = err;
+    if (err.code === 4) throw err;
+    if (err.code !== 100 && !String(err.message).toLowerCase().includes('template cannot be found')) {
+      throw err;
+    }
   }
-  return data;
+  throw lastErr || new Error('(#100) Template cannot be found.');
+}
+
+function parseTemplateLanguage(lang) {
+  if (!lang) return 'en';
+  if (typeof lang === 'string') return lang.trim();
+  return 'en';
+}
+
+function templateLanguageVariants(lang) {
+  const raw = parseTemplateLanguage(lang);
+  const variants = [];
+  const add = (code) => {
+    const v = String(code || '').trim();
+    if (v && !variants.includes(v)) variants.push(v);
+  };
+  add(raw);
+  if (raw.includes('_')) add(raw.split('_')[0]);
+  else if (raw.length === 2) add(`${raw}_US`);
+  add('en_US');
+  add('en');
+  return variants;
 }
 
 function isMessagingWindowError(err) {
