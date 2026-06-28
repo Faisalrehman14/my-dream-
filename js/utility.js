@@ -1,30 +1,37 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v19';
+  const TEMPLATE_VERSION = 'v20';
 
-  /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
-  const wrapperCleanupDone = new Map();
+  /** Meta rejects {{1}} at start/end — invisible chars wrap the variable; customer sees only {{1}} text. */
+  const EXACT_BODY_INVISIBLE = '\u2060';
 
-  /** User text replaces {{1}} — first option is exact message only (best for emoji). */
+  /** User text replaces {{1}} — first option is invisible-wrapped exact message (best for emoji). */
   const TEMPLATE_BODIES = [
     {
-      bodyText: '{{1}}',
-      example: '👋 Hello, we are here for you!',
+      bodyText: `${EXACT_BODY_INVISIBLE}{{1}}${EXACT_BODY_INVISIBLE}`,
+      example: 'Hello, we are here for you.',
+    },
+    {
+      bodyText: `\u200B{{1}}\u200B`,
+      example: 'Hello, we are here for you.',
     },
     {
       bodyText: 'Hello,\n\n{{1}}',
-      example: '👋 Hello, we are here for you!',
+      example: 'Hello, we are here for you.',
     },
     {
       bodyText: 'Message:\n{{1}}',
-      example: '👋 Hello, we are here for you!',
+      example: 'Hello, we are here for you.',
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: '👋 Hello, we are here for you!',
+      example: 'Hello, we are here for you.',
     },
   ];
+
+  /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
+  const wrapperCleanupDone = new Map();
 
   const SAFE_LIBRARY_KEYS = [];
 
@@ -145,7 +152,13 @@ const Utility = (function () {
   }
 
   function isExactMessageBody(body) {
-    return String(body || '').trim() === '{{1}}';
+    const b = String(body || '').trim();
+    if (b === '{{1}}') return true;
+    return /^[\u200B-\u200D\u2060\uFEFF]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF]*$/.test(b);
+  }
+
+  function getExactCreateBodyDefs() {
+    return TEMPLATE_BODIES.slice(0, 2);
   }
 
   async function enrichTemplateRecord(pageId, pageToken, tpl) {
@@ -406,7 +419,8 @@ const Utility = (function () {
 
   async function finalizeTemplateRecord(pageId, pageToken, name) {
     for (let i = 0; i < 6; i++) {
-      const fresh = await fetchTemplateByName(pageId, pageToken, name);
+      const fetched = await fetchTemplateByName(pageId, pageToken, name);
+      const fresh = fetched ? await enrichTemplateRecord(pageId, pageToken, fetched) : null;
       if (fresh && isApprovedStatus(fresh.status)) {
         const body = templateBodyFromApi(fresh);
         if (!body || hasUnwantedWrapper(body) || !isExactMessageBody(body)) {
@@ -432,7 +446,11 @@ const Utility = (function () {
       }
       if (existing?.status === 'PENDING') return null;
     }
-    if (existing?.status === 'REJECTED') return null;
+    if (existing?.status === 'REJECTED') {
+      const err = new Error(`Template "${name}" was rejected by Meta.`);
+      err.templateRejected = true;
+      throw err;
+    }
 
     let lastErr = null;
     for (const lang of ['en_US', 'en']) {
@@ -450,6 +468,9 @@ const Utility = (function () {
         if (result?.status === 'APPROVED') {
           const verified = await finalizeTemplateRecord(pageId, pageToken, name);
           if (verified) return verified;
+        }
+        if (result?.status === 'REJECTED') {
+          lastErr = new Error(`Meta rejected template "${name}".`);
         }
       } catch (err) {
         lastErr = err;
@@ -722,29 +743,35 @@ const Utility = (function () {
     }
 
     clearTemplateCache(pageId);
-    const def = getTemplateDef(0);
-    const names = [
-      ownedTemplateName(pageId, 0),
-      `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36).slice(-5)}`,
-      `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36)}`,
+    const nameSuffixes = [
+      '',
+      `_${Date.now().toString(36).slice(-5)}`,
+      `_${Date.now().toString(36)}`,
     ];
     let lastError = null;
-    for (const name of names) {
-      try {
-        const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-        if (created && isExactMessageBody(created.body)) {
-          assertSafeTemplate(created);
-          return created;
+    for (const def of getExactCreateBodyDefs()) {
+      for (let s = 0; s < nameSuffixes.length; s++) {
+        const name =
+          s === 0
+            ? ownedTemplateName(pageId, 0)
+            : `${ownedTemplateName(pageId, 0)}${nameSuffixes[s]}`;
+        try {
+          const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+          if (created && isExactMessageBody(created.body)) {
+            assertSafeTemplate(created);
+            return created;
+          }
+        } catch (err) {
+          lastError = err;
+          if (err.code === 4 || err.rateLimited) throw err;
+          if (err.templateRejected) continue;
         }
-      } catch (err) {
-        lastError = err;
-        if (err.code === 4 || err.rateLimited) throw err;
       }
     }
 
     throw new Error(
       (lastError?.message ||
-        'Could not create exact-message template ({{1}} only). Open Notifications, wait 1–2 min, then retry.') +
+        'Meta rejected the exact-message template. Wait 1–2 min on Notifications, then retry.') +
         (lastError?.message?.includes('pages_utility_messaging')
           ? ' Sign out and sign in again — allow all permissions.'
           : '')

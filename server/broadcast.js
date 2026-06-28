@@ -152,7 +152,9 @@ function hasUnwantedWrapper(body) {
 }
 
 function isExactMessageBody(body) {
-  return String(body || '').trim() === '{{1}}';
+  const b = String(body || '').trim();
+  if (b === '{{1}}') return true;
+  return /^[\u200B-\u200D\u2060\uFEFF]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF]*$/.test(b);
 }
 
 async function fetchTemplateByName(pageId, pageToken, name) {
