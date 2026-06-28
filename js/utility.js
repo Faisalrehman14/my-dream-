@@ -1,12 +1,12 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v11';
+  const TEMPLATE_VERSION = 'v12';
 
-  /** User's full custom text goes in {{1}}. */
+  /** Customer sees only {{1}} — your exact message text. */
   const TEMPLATE_BODIES = [
     {
-      bodyText: 'Hello,\n\n{{1}}\n\nThank you.',
+      bodyText: '{{1}}',
       example: 'Are you there? We are here for you.',
     },
     {
@@ -14,15 +14,9 @@ const Utility = (function () {
       example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: 'Update:\n{{1}}',
+      bodyText: 'Hello,\n\n{{1}}',
       example: 'Are you there? We are here for you.',
     },
-  ];
-
-  const LIBRARY_FALLBACK_KEYS = [
-    'CONFIRMED_EVENT_UPDATE',
-    'POST_PURCHASE_UPDATE',
-    'ACCOUNT_UPDATE',
   ];
 
   /** pageId -> template object, or false when lookup failed */
@@ -83,6 +77,27 @@ const Utility = (function () {
 
   function isApprovedStatus(status) {
     return String(status || '').toUpperCase() === 'APPROVED';
+  }
+
+  function templateBodyFromApi(tpl) {
+    const components = tpl?.components || [];
+    const bodyComp = components.find((c) => String(c.type || '').toUpperCase() === 'BODY');
+    return bodyComp?.text || '';
+  }
+
+  function hasUnwantedWrapper(body) {
+    const b = String(body || '').toLowerCase();
+    return (
+      b.includes('your account update') ||
+      b.includes('contact us if this was not you') ||
+      b.includes('account update:') ||
+      b.includes('thank you for your order')
+    );
+  }
+
+  function isSendableCustomTemplate(tpl) {
+    if (!isOwnedCustomTemplate(tpl?.name)) return false;
+    return !hasUnwantedWrapper(tpl.body || templateBodyFromApi(tpl));
   }
 
   function normalizeFromApi(tpl) {
@@ -163,25 +178,6 @@ const Utility = (function () {
     };
   }
 
-  async function findAnyApprovedUtility(pageId, pageToken) {
-    const list = await listPageTemplates(pageId, pageToken);
-    const approved = list.filter((t) => isApprovedStatus(t.status));
-    if (!approved.length) return null;
-
-    const score = (t) => {
-      const n = String(t.name || '');
-      if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) return 100;
-      if (isOwnedCustomTemplate(n)) return 90;
-      if (n.startsWith('pagechat_lib_')) return 85;
-      if (n.startsWith('pagechat_')) return 75;
-      if (String(t.category || '').toUpperCase() === 'UTILITY') return 50;
-      return 20;
-    };
-
-    approved.sort((a, b) => score(b) - score(a));
-    return approved[0];
-  }
-
   async function findPageTemplate(pageId, pageToken, name) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { name });
     return list.find((t) => t.name === name) || null;
@@ -201,7 +197,9 @@ const Utility = (function () {
 
   async function findOwnedCustomTemplate(pageId, pageToken) {
     const list = await listPageTemplates(pageId, pageToken);
-    const owned = list.filter((t) => isApprovedStatus(t.status) && isOwnedCustomTemplate(t.name));
+    const owned = list.filter(
+      (t) => isApprovedStatus(t.status) && isOwnedCustomTemplate(t.name) && !hasUnwantedWrapper(templateBodyFromApi(t))
+    );
     return (
       owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
       owned.sort((a, b) => String(b.name).localeCompare(String(a.name)))[0] ||
@@ -410,10 +408,10 @@ const Utility = (function () {
     return null;
   }
 
-  async function ensureUtilityTemplate(pageId, pageToken, categoryKey) {
-    const anyApproved = await findAnyApprovedUtility(pageId, pageToken);
-    if (anyApproved) {
-      return normalizeFromApi(anyApproved);
+  async function ensureUtilityTemplate(pageId, pageToken, _categoryKey) {
+    const owned = await findOwnedCustomTemplate(pageId, pageToken);
+    if (owned) {
+      return normalizeFromApi(owned);
     }
 
     let lastError = null;
@@ -432,22 +430,6 @@ const Utility = (function () {
           lastError = err;
           if (err.code === 4 || err.rateLimited) throw err;
         }
-      }
-    }
-
-    const libOrder = [
-      categoryKey,
-      ...LIBRARY_FALLBACK_KEYS.filter((k) => k !== categoryKey),
-    ].filter(Boolean);
-
-    for (const key of libOrder) {
-      if (!LIBRARY_FALLBACK_KEYS.includes(key)) continue;
-      try {
-        const libTpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
-        if (libTpl) return libTpl;
-      } catch (err) {
-        lastError = err;
-        if (err.code === 4 || err.rateLimited) throw err;
       }
     }
 
@@ -503,9 +485,12 @@ const Utility = (function () {
       (t) => t.name === tpl.name && isApprovedStatus(t.status)
     );
     if (matches.length) {
-      return normalizeFromApi(matches[0]);
+      const resolved = normalizeFromApi(matches[0]);
+      if (isSendableCustomTemplate(resolved)) return resolved;
     }
-    return tpl;
+    const err = new Error('WRAPPER_TEMPLATE');
+    err.wrapperTemplate = true;
+    throw err;
   }
 
   function isTemplateNotFoundError(err) {
@@ -539,19 +524,31 @@ const Utility = (function () {
   }
 
   async function sendViaUtility(page, psid, msg, categoryKey) {
-    let tpl = await getUtilityTemplate(page, categoryKey);
-    tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
-    readyTemplates.set(categoryKey || 'custom', tpl);
+    const loadTemplate = async () => {
+      clearTemplateCache(page.id);
+      let tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
+      tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
+      templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
+      readyTemplates.set(categoryKey || 'custom', tpl);
+      return tpl;
+    };
+
+    let tpl;
+    try {
+      tpl = await getUtilityTemplate(page, categoryKey);
+      tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
+    } catch (err) {
+      if (!err.wrapperTemplate) throw err;
+      tpl = await loadTemplate();
+    }
+
     try {
       const result = await sendUtilityWithLanguageRetry(page, psid, msg, tpl);
       rememberPreview(page.id, psid, msg);
       return result;
     } catch (err) {
       if (!isTemplateNotFoundError(err)) throw err;
-      clearTemplateCache(page.id);
-      tpl = await ensureUtilityTemplate(page.id, page.access_token, categoryKey);
-      tpl = await resolveTemplateForSend(page.id, page.access_token, tpl);
-      templateCache.set(`${page.id}:${categoryKey || 'any'}`, tpl);
+      tpl = await loadTemplate();
       const result = await sendUtilityWithLanguageRetry(page, psid, msg, tpl);
       rememberPreview(page.id, psid, msg);
       return result;
