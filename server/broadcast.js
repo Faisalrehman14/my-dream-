@@ -37,8 +37,11 @@ function publicJob(job) {
 }
 
 function validateStartPayload(body) {
-  if (!body?.pageId || !body?.pageToken || !body?.templateName || !body?.detail?.trim()) {
-    return 'pageId, pageToken, templateName, and detail are required';
+  if (!body?.pageId || !body?.pageToken || !body?.detail?.trim()) {
+    return 'pageId, pageToken, and detail are required';
+  }
+  if (!body.directOnly && !body?.templateName) {
+    return 'templateName is required unless directOnly is true';
   }
   if (!Array.isArray(body.recipients) || !body.recipients.length) {
     return 'At least one recipient is required';
@@ -59,9 +62,10 @@ function createJob(payload) {
     status: 'queued',
     pageId: String(payload.pageId),
     pageToken: payload.pageToken,
-    templateName: payload.templateName,
+    templateName: payload.templateName || '',
     language: payload.language || 'en',
     detail: String(payload.detail).trim(),
+    directOnly: Boolean(payload.directOnly),
     recipients: payload.recipients.map((r) => ({
       psid: String(r.psid),
       name: r.name || r.psid,
@@ -147,6 +151,9 @@ function isMessagingWindowError(err) {
 }
 
 async function sendOne(job, recipient) {
+  if (job.directOnly || !job.templateName) {
+    return sendDirect(job, recipient);
+  }
   try {
     return await sendDirect(job, recipient);
   } catch (err) {

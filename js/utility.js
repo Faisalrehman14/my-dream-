@@ -1,13 +1,23 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v7';
+  const TEMPLATE_VERSION = 'v8';
 
-  /** One Meta-safe shell — user's full custom text goes inside {{1}}. */
-  const UNIVERSAL_TEMPLATE = {
-    bodyText: 'Message: {{1}}.',
-    example: 'we are here for you',
-  };
+  /** Meta-safe template bodies to try (user's full text goes in {{1}}). */
+  const TEMPLATE_BODIES = [
+    {
+      bodyText: 'Your update: {{1}}. Thank you.',
+      example: 'Hello, we are here for you.',
+    },
+    {
+      bodyText: 'Notification: {{1}} Reply if you need help.',
+      example: 'Your appointment is confirmed for today.',
+    },
+    {
+      bodyText: 'Message from our page: {{1}}.',
+      example: 'We are here for you today.',
+    },
+  ];
 
   const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
 
@@ -27,11 +37,12 @@ const Utility = (function () {
     localStorage.setItem(FB_CONFIG.storageKeys.utilityTemplates, JSON.stringify(state));
   }
 
-  function getTemplateDef() {
+  function getTemplateDef(index = 0) {
+    const body = TEMPLATE_BODIES[index] || TEMPLATE_BODIES[0];
     return {
-      bodyText: UNIVERSAL_TEMPLATE.bodyText,
-      example: UNIVERSAL_TEMPLATE.example,
-      preview: UNIVERSAL_TEMPLATE.example,
+      bodyText: body.bodyText,
+      example: body.example,
+      preview: body.example,
     };
   }
 
@@ -57,8 +68,8 @@ const Utility = (function () {
     saveCustomTemplatesState(state);
   }
 
-  function ownedTemplateName(pageId) {
-    return `pagechat_${TEMPLATE_VERSION}_custom_${String(pageId).slice(-10)}`;
+  function ownedTemplateName(pageId, bodyIndex = 0) {
+    return `pagechat_${TEMPLATE_VERSION}_custom_${String(pageId).slice(-10)}_${bodyIndex}`;
   }
 
   function sleep(ms) {
@@ -100,21 +111,47 @@ const Utility = (function () {
 
   async function findAnyApprovedTemplate(pageId, pageToken) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
-    const tag = `pagechat_${TEMPLATE_VERSION}_custom`;
     return (
-      list.find((t) => t.status === 'APPROVED' && t.name.includes(tag)) ||
-      list.find((t) => t.status === 'APPROVED' && t.name.startsWith('pagechat_lib_')) ||
+      list.find((t) => t.status === 'APPROVED' && t.name.startsWith('pagechat_')) ||
+      list.find((t) => t.status === 'APPROVED' && String(t.name || '').includes('pagechat')) ||
       null
     );
   }
 
-  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 5) {
+  async function waitForTemplateApproval(pageId, pageToken, name, attempts = 8) {
     for (let i = 0; i < attempts; i++) {
-      await sleep(1200 + i * 600);
+      await sleep(1000 + i * 700);
       const tpl = await findPageTemplate(pageId, pageToken, name);
-      if (tpl?.status === 'APPROVED' || tpl?.status === 'REJECTED') return tpl;
+      if (tpl?.status === 'APPROVED') return tpl;
+      if (tpl?.status === 'REJECTED') return tpl;
     }
     return findPageTemplate(pageId, pageToken, name);
+  }
+
+  async function tryCreateOwnedTemplate(pageId, pageToken, def, name) {
+    let existing = await findPageTemplate(pageId, pageToken, name);
+    if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
+    if (existing?.status === 'PENDING') {
+      existing = await waitForTemplateApproval(pageId, pageToken, name);
+      if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
+      if (existing?.status === 'PENDING') return null;
+    }
+    if (existing?.status === 'REJECTED') return null;
+
+    try {
+      const created = await GraphAPI.createPageUtilityTemplate(
+        pageId,
+        pageToken,
+        ownedPayload(name, def)
+      );
+      if (created?.status === 'APPROVED') return normalizeOwned(name, def);
+      const result = await waitForTemplateApproval(pageId, pageToken, name);
+      if (result?.status === 'APPROVED') return normalizeOwned(name, def);
+    } catch (err) {
+      if (err.code === 4 || err.rateLimited) throw err;
+      return null;
+    }
+    return null;
   }
 
   function normalizeLibraryTemplate(name, libTpl) {
@@ -129,17 +166,6 @@ const Utility = (function () {
       paramRoles: ['detail'],
       buttons: libTpl?.buttons || [],
     };
-  }
-
-  async function tryCreateOwnedTemplate(pageId, pageToken, def, name) {
-    const existing = await findPageTemplate(pageId, pageToken, name);
-    if (existing?.status === 'APPROVED') return normalizeOwned(name, def);
-    if (existing?.status === 'REJECTED' || existing?.status === 'PENDING') return null;
-
-    await GraphAPI.createPageUtilityTemplate(pageId, pageToken, ownedPayload(name, def));
-    const result = await waitForTemplateApproval(pageId, pageToken, name);
-    if (result?.status === 'APPROVED') return normalizeOwned(name, def);
-    return null;
   }
 
   async function tryMetaLibraryTemplate(pageId, pageToken, categoryKey) {
@@ -187,35 +213,54 @@ const Utility = (function () {
     return null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, _categoryKey) {
-    const def = getTemplateDef();
-
+  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
     const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken);
     if (approvedExisting) {
-      return normalizeOwned(approvedExisting.name, def);
+      return normalizeOwned(approvedExisting.name, getTemplateDef());
     }
 
-    const baseName = ownedTemplateName(pageId);
-    const names = [
-      baseName,
-      `${baseName}_${Date.now().toString(36).slice(-5)}`,
-      `${baseName}_${Date.now().toString(36)}`,
-    ];
+    let lastError = null;
 
-    for (const name of names) {
-      const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-      if (created) return created;
+    for (let i = 0; i < TEMPLATE_BODIES.length; i++) {
+      const def = getTemplateDef(i);
+      const names = [
+        ownedTemplateName(pageId, i),
+        `${ownedTemplateName(pageId, i)}_${Date.now().toString(36).slice(-5)}`,
+      ];
+      for (const name of names) {
+        try {
+          const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+          if (created) return created;
+        } catch (err) {
+          lastError = err;
+          if (err.code === 4 || err.rateLimited) throw err;
+        }
+      }
     }
 
-    const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, 'CONFIRMED_EVENT_UPDATE');
-    if (libraryTpl) {
-      showStatus('Using Meta pre-approved notification template.', true);
-      return libraryTpl;
+    for (const key of ['CONFIRMED_EVENT_UPDATE', 'POST_PURCHASE_UPDATE', 'ACCOUNT_UPDATE']) {
+      const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
+      if (libraryTpl) {
+        showStatus('Using Meta pre-approved notification template.', true);
+        return libraryTpl;
+      }
     }
 
-    throw new Error(
-      'Could not prepare notification template. Wait a minute and try again, or use simpler message text.'
+    const err = new Error(
+      lastError?.message ||
+        'Template backup unavailable — you can still send using direct Messenger text.'
     );
+    err.templateOptional = true;
+    throw err;
+  }
+
+  async function getTemplateIfAvailable(page, categoryKey) {
+    try {
+      return await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+    } catch (err) {
+      if (err.templateOptional || err.code === 4) return null;
+      throw err;
+    }
   }
 
   function isMessagingWindowError(err) {
@@ -243,31 +288,6 @@ const Utility = (function () {
     return result;
   }
 
-  function buildSendComponents(tpl, detail, customerName) {
-    const components = [];
-    const roles = tpl.paramRoles?.length ? tpl.paramRoles : ['detail'];
-    const bodyParameters = roles.map((role) => ({
-      type: 'text',
-      text: role === 'name' ? customerName || 'Customer' : detail,
-    }));
-
-    if (bodyParameters.length) {
-      components.push({ type: 'body', parameters: bodyParameters });
-    }
-
-    if (tpl.buttons?.length) {
-      components.push({
-        type: 'buttons',
-        parameters: tpl.buttons.map((btn) => {
-          if (btn.type === 'URL') return { type: 'URL', url: 'https://www.example.com' };
-          return { type: 'POSTBACK', payload: 'pagechat_notification' };
-        }),
-      });
-    }
-
-    return components;
-  }
-
   function formatPreview(tpl) {
     if (!tpl?.preview) return 'Templates ready. You can send notifications.';
     return `Template ready: "${tpl.preview}"`;
@@ -280,14 +300,7 @@ const Utility = (function () {
     preparedPageId = page.id;
     preparePromise = (async () => {
       readyTemplates.clear();
-      showStatus('Preparing notification channel…', true, true);
-      try {
-        const tpl = await ensureOwnedTemplate(page.id, page.access_token, 'custom');
-        readyTemplates.set('custom', tpl);
-        showStatus('Ready — type your custom message and send.', true);
-      } catch (err) {
-        showStatus(err.message, false);
-      }
+      showStatus('Ready — type your message and send.', true);
     })();
 
     try {
@@ -342,7 +355,16 @@ const Utility = (function () {
       }
     }
 
-    return sendViaUtility(page, psid, msg, categoryKey);
+    try {
+      return await sendViaUtility(page, psid, msg, categoryKey);
+    } catch (err) {
+      if (err.templateOptional) {
+        throw new Error(
+          'Could not send right now. Wait 15–30 minutes (Facebook limit) then try again.'
+        );
+      }
+      throw err;
+    }
   }
 
   async function sendToAll(page, recipients, text, categoryKey, options = {}) {
@@ -382,8 +404,7 @@ const Utility = (function () {
 
   async function startBulkCampaign(page, recipients, text, categoryKey, options = {}) {
     const detail = text.trim();
-    const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
-    readyTemplates.set(categoryKey, tpl);
+    const tpl = await getTemplateIfAvailable(page, categoryKey);
     options.onProgress?.({
       current: 0,
       total: recipients.length,
@@ -392,9 +413,10 @@ const Utility = (function () {
     const job = await GraphAPI.startBroadcastCampaign({
       pageId: page.id,
       pageToken: page.access_token,
-      templateName: tpl.name,
-      language: tpl.language || 'en',
+      templateName: tpl?.name || '',
+      language: tpl?.language || 'en',
       detail,
+      directOnly: !tpl,
       recipients,
     });
     return {
