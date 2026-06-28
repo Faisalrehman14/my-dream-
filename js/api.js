@@ -25,6 +25,14 @@ const GraphAPI = (function () {
 
   const JSON_UTF8 = { 'Content-Type': 'application/json; charset=utf-8' };
 
+  function utf8JsonBody(body) {
+    const payload = JSON.stringify(body);
+    if (typeof Blob !== 'undefined') {
+      return new Blob([payload], { type: 'application/json;charset=utf-8' });
+    }
+    return payload;
+  }
+
   function getUserAccessToken() {
     const auth = typeof FB !== 'undefined' && FB.getAuthResponse?.();
     return auth?.accessToken || null;
@@ -198,7 +206,7 @@ const GraphAPI = (function () {
     const init = { method: 'POST' };
     if (body != null && typeof body === 'object' && Object.keys(body).length > 0) {
       init.headers = JSON_UTF8;
-      init.body = JSON.stringify(body);
+      init.body = utf8JsonBody(body);
     }
     const res = await fetch(url, init);
     const data = await res.json();
@@ -347,7 +355,7 @@ const GraphAPI = (function () {
     const res = await fetch('/api/broadcast/start', {
       method: 'POST',
       headers: JSON_UTF8,
-      body: JSON.stringify(payload),
+      body: utf8JsonBody(payload),
     });
     const data = await res.json();
     if (!res.ok) {

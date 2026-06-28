@@ -1,29 +1,29 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v14';
+  const TEMPLATE_VERSION = 'v15';
 
-  /** Minimal wrapper — your full text replaces {{1}}. No "Contact us" suffix. */
+  /** User text replaces {{1}} — first option is exact message only (best for emoji). */
   const TEMPLATE_BODIES = [
     {
-      bodyText: 'Hello,\n\n{{1}}',
-      example: 'Are you there 👋 We are here for you.',
+      bodyText: '{{1}}',
+      example: '👋 Hello, we are here for you!',
     },
     {
-      bodyText: 'Your message:\n{{1}}',
-      example: 'Are you there 👋 We are here for you.',
+      bodyText: 'Hello,\n\n{{1}}',
+      example: '👋 Hello, we are here for you!',
     },
     {
       bodyText: 'Message:\n{{1}}',
-      example: 'Are you there 👋 We are here for you.',
+      example: '👋 Hello, we are here for you!',
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: 'Are you there 👋 We are here for you.',
+      example: '👋 Hello, we are here for you!',
     },
   ];
 
-  const SAFE_LIBRARY_KEYS = ['CONFIRMED_EVENT_UPDATE', 'POST_PURCHASE_UPDATE'];
+  const SAFE_LIBRARY_KEYS = [];
 
   /** pageId -> template object, or false when lookup failed */
   const templateCache = new Map();
@@ -93,19 +93,33 @@ const Utility = (function () {
 
   function hasUnwantedWrapper(body) {
     const b = String(body || '').toLowerCase();
-    return (
-      b.includes('your account update') ||
-      b.includes('contact us if this was not you') ||
-      b.includes('account update:') ||
-      b.includes('thank you for your order')
-    );
+    const blocked = [
+      'your account update',
+      'contact us if this was not you',
+      'account update:',
+      'thank you for your order',
+      'good news!',
+      'good news',
+      'your order is now',
+      'order is now',
+      'reminder: your appointment',
+      'your appointment is',
+      'your recent purchase',
+      'shipment tracking',
+    ];
+    return blocked.some((phrase) => b.includes(phrase));
+  }
+
+  function isOwnedSendableTemplate(tpl) {
+    const body = tpl?.body || templateBodyFromApi(tpl) || '';
+    const name = String(tpl?.name || '');
+    if (!isOwnedCustomTemplate(name)) return false;
+    if (hasUnwantedWrapper(body)) return false;
+    return true;
   }
 
   function isSendableTemplate(tpl) {
-    const body = tpl?.body || templateBodyFromApi(tpl) || '';
-    if (hasUnwantedWrapper(body)) return false;
-    const name = String(tpl?.name || '');
-    return isOwnedCustomTemplate(name) || name.startsWith('pagechat_lib_');
+    return isOwnedSendableTemplate(tpl);
   }
 
   function normalizeFromApi(tpl) {
@@ -190,14 +204,16 @@ const Utility = (function () {
     };
   }
 
-  function templatePreferScore(name) {
+  function templatePreferScore(name, body = '') {
     const n = String(name || '');
-    if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) return 100;
-    if (isOwnedCustomTemplate(n)) return 90;
-    if (n.startsWith('pagechat_lib_safe_')) return 85;
-    if (n.startsWith('pagechat_lib_')) return 70;
-    if (n.startsWith('pagechat_')) return 60;
-    return 10;
+    let score = 10;
+    if (n.startsWith(`pagechat_${TEMPLATE_VERSION}`)) score = 100;
+    else if (isOwnedCustomTemplate(n)) score = 90;
+    else if (n.startsWith('pagechat_')) score = 60;
+    const b = String(body || '').trim();
+    if (b === '{{1}}') score += 15;
+    else if (hasUnwantedWrapper(b)) score = 0;
+    return score;
   }
 
   function uniqueLanguageCodes(lang) {
@@ -225,13 +241,17 @@ const Utility = (function () {
   async function findOwnedCustomTemplate(pageId, pageToken) {
     const list = await listPageTemplates(pageId, pageToken);
     const owned = list.filter(
-      (t) => isApprovedStatus(t.status) && isOwnedCustomTemplate(t.name) && !hasUnwantedWrapper(templateBodyFromApi(t))
+      (t) =>
+        isApprovedStatus(t.status) &&
+        isOwnedCustomTemplate(t.name) &&
+        !hasUnwantedWrapper(templateBodyFromApi(t))
     );
-    return (
-      owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
-      owned.sort((a, b) => String(b.name).localeCompare(String(a.name)))[0] ||
-      null
-    );
+    if (!owned.length) return null;
+    return [...owned].sort(
+      (a, b) =>
+        templatePreferScore(b.name, templateBodyFromApi(b)) -
+        templatePreferScore(a.name, templateBodyFromApi(a))
+    )[0];
   }
 
   async function findApprovedLibClone(pageId, pageToken, categoryKey) {
@@ -517,14 +537,6 @@ const Utility = (function () {
       }
     }
 
-    try {
-      const libTpl = await trySafeLibraryTemplate(pageId, pageToken);
-      if (libTpl) return libTpl;
-    } catch (err) {
-      lastError = err;
-      if (err.code === 4 || err.rateLimited) throw err;
-    }
-
     const hint = lastError?.message?.includes('pages_utility_messaging')
       ? ' Sign out and sign in again — allow all permissions.'
       : '';
@@ -538,8 +550,12 @@ const Utility = (function () {
     const list = await listPageTemplates(pageId, pageToken);
     return list
       .filter((t) => isApprovedStatus(t.status))
-      .filter((t) => isSendableTemplate(normalizeFromApi(t)))
-      .sort((a, b) => templatePreferScore(b.name) - templatePreferScore(a.name));
+      .filter((t) => isOwnedSendableTemplate(normalizeFromApi(t)))
+      .sort(
+        (a, b) =>
+          templatePreferScore(b.name, templateBodyFromApi(b)) -
+          templatePreferScore(a.name, templateBodyFromApi(a))
+      );
   }
 
   async function getVerifiedUtilityTemplate(page, categoryKey) {
@@ -583,6 +599,12 @@ const Utility = (function () {
   }
 
   async function trySendUtilityTemplate(page, psid, msg, rawTemplate) {
+    const body = templateBodyFromApi(rawTemplate);
+    if (hasUnwantedWrapper(body)) {
+      const err = new Error('WRAPPER_TEMPLATE');
+      err.wrapperTemplate = true;
+      throw err;
+    }
     const norm = normalizeFromApi(rawTemplate);
     const detail = normalizeOutgoingText(msg);
     const langs = uniqueLanguageCodes(rawTemplate.language);
@@ -630,6 +652,7 @@ const Utility = (function () {
         } catch (err) {
           lastErr = err;
           if (isRateLimitError(err)) throw err;
+          if (err.wrapperTemplate) continue;
           if (!isTemplateNotFoundError(err)) throw err;
         }
       }

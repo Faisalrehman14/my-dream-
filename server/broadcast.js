@@ -18,6 +18,10 @@ function normalizeOutgoingText(text) {
 
 const JSON_UTF8 = { 'Content-Type': 'application/json; charset=utf-8' };
 
+function utf8JsonBody(body) {
+  return Buffer.from(JSON.stringify(body), 'utf8');
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -97,7 +101,7 @@ async function sendDirect(job, recipient) {
   const res = await fetch(url, {
     method: 'POST',
     headers: JSON_UTF8,
-    body: JSON.stringify({
+    body: utf8JsonBody({
       recipient: { id: recipient.psid },
       messaging_type: 'RESPONSE',
       message: { text: job.detail },
@@ -119,7 +123,7 @@ async function sendUtilityPlain(job, recipient) {
   const res = await fetch(url, {
     method: 'POST',
     headers: JSON_UTF8,
-    body: JSON.stringify({
+    body: utf8JsonBody({
       recipient: { id: recipient.psid },
       messaging_type: 'UTILITY',
       message: { text: job.detail },
@@ -144,7 +148,7 @@ async function sendUtility(job, recipient) {
     const res = await fetch(url, {
       method: 'POST',
       headers: JSON_UTF8,
-      body: JSON.stringify({
+      body: utf8JsonBody({
         recipient: { id: recipient.psid },
         messaging_type: 'UTILITY',
         message: {
