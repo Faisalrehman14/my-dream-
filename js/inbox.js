@@ -572,27 +572,39 @@ const Inbox = (function () {
     setTimeout(() => URL.revokeObjectURL(url), 500);
   }
 
-  async function downloadSubscriberIdsFile(page, onProgress) {
+  async function downloadReplyableIdsFile(page, onProgress) {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
     let recipients = getUtilityRecipients(page.id);
     if (!recipients.length || allSubscribersPageId !== page.id) {
       recipients = await loadAllSubscribers(page, onProgress);
     }
     if (!recipients.length) {
-      throw new Error('No subscribers found. Customers must message your Page first.');
+      throw new Error('No customers found. Someone must message your Page first.');
     }
     const content = recipients.map((r) => r.psid).join('\n') + '\n';
     const safeName = String(page.name || 'page')
       .replace(/[^\w.-]+/g, '_')
       .slice(0, 40);
     const date = new Date().toISOString().slice(0, 10);
-    const filename = `${safeName}-subscriber-ids-${date}.txt`;
+    const filename = `${safeName}-can-reply-ids-${date}.txt`;
     triggerTextDownload(filename, content);
     return { count: recipients.length, filename };
   }
 
-  function getSubscriberCount(pageId) {
+  function getReplyableCount(pageId) {
     return getUtilityRecipients(pageId).length;
+  }
+
+  function getSubscriberCount(pageId) {
+    return getReplyableCount(pageId);
+  }
+
+  async function downloadSubscriberIdsFile(page, onProgress) {
+    return downloadReplyableIdsFile(page, onProgress);
+  }
+
+  async function loadAllReplyableRecipients(page, onProgress) {
+    return loadAllSubscribers(page, onProgress);
   }
 
   function isLoadingAllSubscribers() {
@@ -753,6 +765,9 @@ const Inbox = (function () {
     setInboxViewActive,
     getConversations,
     getUtilityRecipients,
+    getReplyableCount,
+    loadAllReplyableRecipients,
+    downloadReplyableIdsFile,
     getSubscriberCount,
     downloadSubscriberIdsFile,
     loadAllSubscribers,

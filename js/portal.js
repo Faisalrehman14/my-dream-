@@ -662,7 +662,7 @@
     const btn = document.getElementById('btn-download-subscriber-ids');
     if (!el) return;
     if (!activePage) {
-      el.textContent = 'Select a Page to export subscriber IDs.';
+      el.textContent = 'Select a Page to export can-reply IDs.';
       if (btn) btn.disabled = true;
       return;
     }
@@ -671,10 +671,10 @@
       if (btn) btn.disabled = true;
       return;
     }
-    const count = Inbox.getSubscriberCount?.(activePage.id) || 0;
+    const count = Inbox.getReplyableCount?.(activePage.id) || 0;
     el.textContent = count
-      ? `${count} subscriber${count === 1 ? '' : 's'} ready — click to download .txt file (one ID per line).`
-      : 'No subscribers loaded yet — click Download to fetch all customer IDs from Messenger.';
+      ? `${count} can-reply customer${count === 1 ? '' : 's'} — click to download .txt (one ID per line).`
+      : 'Click Download to load all customer IDs from Messenger inbox.';
     if (btn) btn.disabled = false;
   }
 
@@ -685,11 +685,11 @@
     }
     const btn = document.getElementById('btn-download-subscriber-ids');
     try {
-      updateSubscriberExportStatus('Loading all subscribers from Messenger…');
-      const result = await Inbox.downloadSubscriberIdsFile(activePage, (p) => {
-        updateSubscriberExportStatus(`Loading subscribers… ${p.loaded || 0}`);
+      updateSubscriberExportStatus('Loading can-reply customers from Messenger…');
+      const result = await Inbox.downloadReplyableIdsFile(activePage, (p) => {
+        updateSubscriberExportStatus(`Loading customers… ${p.loaded || 0}`);
       });
-      toast(`Downloaded ${result.count} subscriber ID${result.count === 1 ? '' : 's'}`);
+      toast(`Downloaded ${result.count} can-reply ID${result.count === 1 ? '' : 's'}`);
       updateSubscriberExportStatus();
     } catch (e) {
       toast(e.message, true);
@@ -742,7 +742,7 @@
       refreshPageMeta();
       updateSubscriberExportStatus();
       if (activePage) {
-        Inbox.loadAllSubscribers?.(activePage)
+        Inbox.loadAllReplyableRecipients?.(activePage)
           .then(() => updateSubscriberExportStatus())
           .catch(() => updateSubscriberExportStatus());
       }
