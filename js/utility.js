@@ -1,7 +1,7 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v18';
+  const TEMPLATE_VERSION = 'v19';
 
   /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
   const wrapperCleanupDone = new Map();
@@ -120,16 +120,38 @@ const Utility = (function () {
     return !blocked.some((part) => n.includes(part));
   }
 
-  function isWrapperTemplateRecord(tpl) {
-    const name = String(tpl?.name || '');
+  /** Only PageChat-owned custom templates — library clones cannot be API-deleted (400). */
+  function isDeletableWrapperTemplate(tpl) {
+    const name = String(tpl?.name || '').toLowerCase();
+    if (!name.startsWith('pagechat_') || name.includes('_lib_')) return false;
     const body = templateBodyFromApi(tpl);
-    if (name.includes('_lib_') || name.toLowerCase().includes('post_purchase')) return true;
+    if (
+      name.includes(`pagechat_${TEMPLATE_VERSION}_custom_`) &&
+      isExactMessageBody(body)
+    ) {
+      return false;
+    }
+    if (
+      name.includes('post_purchase') ||
+      name.includes('account_update') ||
+      name.includes('order_confirm') ||
+      name.includes('good_news')
+    ) {
+      return true;
+    }
     if (body && hasUnwantedWrapper(body)) return true;
+    if (name.includes('_custom_') && body && !isExactMessageBody(body)) return true;
     return false;
   }
 
   function isExactMessageBody(body) {
     return String(body || '').trim() === '{{1}}';
+  }
+
+  async function enrichTemplateRecord(pageId, pageToken, tpl) {
+    if (!tpl?.name) return tpl;
+    if (templateBodyFromApi(tpl)) return tpl;
+    return (await fetchTemplateByName(pageId, pageToken, tpl.name)) || tpl;
   }
 
   async function cleanupWrapperTemplatesFromPage(pageId, pageToken, force = false) {
@@ -140,17 +162,17 @@ const Utility = (function () {
     const seen = new Set();
     for (const tpl of all) {
       const name = String(tpl?.name || '').trim();
-      if (!name || seen.has(name) || !isWrapperTemplateRecord(tpl)) continue;
+      if (!name || seen.has(name) || !isDeletableWrapperTemplate(tpl)) continue;
       seen.add(name);
       try {
-        await GraphAPI.deletePageMessageTemplate(pageId, pageToken, name, tpl.id);
+        await GraphAPI.deletePageMessageTemplate(pageId, pageToken, name);
         removed++;
       } catch (err) {
         if (err.code === 4 || err.rateLimited) throw err;
       }
     }
     wrapperCleanupDone.set(pageId, true);
-    if (removed) await sleep(1500);
+    if (removed) await sleep(800);
     return removed;
   }
 
@@ -415,12 +437,16 @@ const Utility = (function () {
     let lastErr = null;
     for (const lang of ['en_US', 'en']) {
       try {
-        await GraphAPI.createPageUtilityTemplate(
+        const createRes = await GraphAPI.createPageUtilityTemplate(
           pageId,
           pageToken,
           ownedPayload(name, def, lang)
         );
-        const result = await waitForTemplateApproval(pageId, pageToken, name, 20);
+        if (createRes?.status === 'APPROVED') {
+          const verified = await finalizeTemplateRecord(pageId, pageToken, name);
+          if (verified) return verified;
+        }
+        const result = await waitForTemplateApproval(pageId, pageToken, name, 12);
         if (result?.status === 'APPROVED') {
           const verified = await finalizeTemplateRecord(pageId, pageToken, name);
           if (verified) return verified;
@@ -664,24 +690,28 @@ const Utility = (function () {
 
   async function listLiveSendableTemplates(pageId, pageToken) {
     const list = await listAllPageTemplates(pageId, pageToken);
-    return list
-      .filter((t) => isApprovedStatus(t.status))
-      .filter((t) => {
-        const body = templateBodyFromApi(t);
-        if (!body) return false;
-        if (!isExactMessageBody(body)) return false;
-        return isOwnedSendableTemplate(normalizeFromApi(t));
-      })
-      .sort(
-        (a, b) =>
-          templatePreferScore(b.name, templateBodyFromApi(b)) -
-          templatePreferScore(a.name, templateBodyFromApi(a))
-      );
+    const candidates = list.filter(
+      (t) =>
+        isApprovedStatus(t.status) &&
+        isOwnedCustomTemplate(t.name) &&
+        isAllowedTemplateName(t.name)
+    );
+    const sendable = [];
+    for (const raw of candidates) {
+      const tpl = await enrichTemplateRecord(pageId, pageToken, raw);
+      const body = templateBodyFromApi(tpl);
+      if (!isExactMessageBody(body)) continue;
+      if (hasUnwantedWrapper(body)) continue;
+      sendable.push(tpl);
+    }
+    return sendable.sort(
+      (a, b) =>
+        templatePreferScore(b.name, templateBodyFromApi(b)) -
+        templatePreferScore(a.name, templateBodyFromApi(a))
+    );
   }
 
   async function resolveExactCustomTemplate(pageId, pageToken) {
-    await cleanupWrapperTemplatesFromPage(pageId, pageToken);
-
     const live = await listLiveSendableTemplates(pageId, pageToken);
     if (live.length) {
       const verified = await finalizeTemplateRecord(pageId, pageToken, live[0].name);
@@ -696,6 +726,7 @@ const Utility = (function () {
     const names = [
       ownedTemplateName(pageId, 0),
       `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36).slice(-5)}`,
+      `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36)}`,
     ];
     let lastError = null;
     for (const name of names) {
@@ -787,8 +818,6 @@ const Utility = (function () {
     const detail = normalizeOutgoingText(msg);
     let lastErr = null;
 
-    await cleanupWrapperTemplatesFromPage(page.id, page.access_token);
-
     for (let round = 0; round < 2; round++) {
       let candidates = await listLiveSendableTemplates(page.id, page.access_token);
 
@@ -834,13 +863,12 @@ const Utility = (function () {
     preparePromise = (async () => {
       readyTemplates.clear();
       clearTemplateCache(page.id);
-      showStatus('Preparing Meta utility template (removing old order wrappers…)…', true, true);
+      showStatus('Preparing exact-message template…', true, true);
       try {
-        const removed = await cleanupWrapperTemplatesFromPage(page.id, page.access_token);
+        cleanupWrapperTemplatesFromPage(page.id, page.access_token).catch(() => {});
         const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
         readyTemplates.set('custom', tpl);
-        const extra = removed ? ` Removed ${removed} old wrapper template(s).` : '';
-        showStatus(`Ready — exact template: ${tpl.name}.${extra}`, true);
+        showStatus(`Ready — exact template: ${tpl.name}`, true);
       } catch (err) {
         if (isRateLimitError(err)) {
           showStatus(err.message, false);

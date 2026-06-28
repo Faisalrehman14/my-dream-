@@ -452,11 +452,10 @@ const GraphAPI = (function () {
     return pagePost(pageToken, [pageId, 'message_templates'], null, template);
   }
 
-  async function deletePageMessageTemplate(pageId, pageToken, templateName, templateId) {
-    const query = { name: String(templateName || '').trim() };
-    if (!query.name) throw new Error('Template name required to delete.');
-    if (templateId) query.template_id = String(templateId);
-    return pageDeleteReq(pageToken, [pageId, 'message_templates'], query);
+  async function deletePageMessageTemplate(pageId, pageToken, templateName) {
+    const name = String(templateName || '').trim();
+    if (!name) throw new Error('Template name required to delete.');
+    return pageDeleteReq(pageToken, [pageId, 'message_templates'], { name });
   }
 
   async function searchUtilityTemplateLibrary(pageToken, query = {}) {
