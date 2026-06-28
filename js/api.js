@@ -11,6 +11,9 @@ const GraphAPI = (function () {
 
   /** pageId -> access_token (avoid re-fetching; each fetch can rotate/invalidate prior tokens) */
   const pageTokenCache = new Map();
+  let permissionCache = null;
+  let permissionCacheAt = 0;
+  const PERM_CACHE_MS = 60000;
 
   function apiVersion() {
     return FB_CONFIG.version || 'v21.0';
@@ -75,11 +78,16 @@ const GraphAPI = (function () {
   }
 
   function graphErrorFromPayload(e) {
-    const msg = e.error_user_msg || e.message || JSON.stringify(e);
+    let msg = e.error_user_msg || e.message || JSON.stringify(e);
+    if (e.code === 4) {
+      msg =
+        'Facebook app request limit reached. Wait 15–30 minutes, then try once. Do not tap Continue repeatedly.';
+    }
     const err = new Error(msg);
     err.code = e.code;
     err.subcode = e.error_subcode;
     err.fbtrace_id = e.fbtrace_id;
+    if (e.code === 4) err.rateLimited = true;
     if (e.error_subcode === 2069032) {
       err.pageTokenRequired = true;
     } else if (isInvalidTokenError(err)) {
@@ -637,14 +645,24 @@ const GraphAPI = (function () {
     return { posts: enriched, source: source + ' + metrics', debug, perm: { ok: true, status: perm } };
   }
 
-  async function getPermissionStatus() {
+  async function getPermissionStatus(force = false) {
+    if (!force && permissionCache && Date.now() - permissionCacheAt < PERM_CACHE_MS) {
+      return permissionCache;
+    }
     const res = await userGet(['me', 'permissions'], {});
     const all = res.data || [];
-    return {
+    permissionCache = {
       granted: all.filter((p) => p.status === 'granted').map((p) => p.permission),
       declined: all.filter((p) => p.status === 'declined').map((p) => p.permission),
       expired: all.filter((p) => p.status === 'expired').map((p) => p.permission),
     };
+    permissionCacheAt = Date.now();
+    return permissionCache;
+  }
+
+  function clearPermissionCache() {
+    permissionCache = null;
+    permissionCacheAt = 0;
   }
 
   async function getGrantedPermissions() {
@@ -709,6 +727,7 @@ const GraphAPI = (function () {
     getPagePosts,
     getGrantedPermissions,
     getPermissionStatus,
+    clearPermissionCache,
     hasEngagementPermission,
     isEngagementError,
     extractCustomerFromConversation,

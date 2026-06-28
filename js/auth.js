@@ -57,48 +57,51 @@ const Auth = (function () {
     'pages_utility_messaging',
   ];
 
+  function scopesFromGrantedString(grantedScopes) {
+    return String(grantedScopes || '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
+
   function checkSession() {
     return new Promise((resolve) => {
       if (!ready) return resolve(null);
       FB.getLoginStatus((res) => {
         if (res.status !== 'connected') return resolve(null);
-        const token = res.authResponse.accessToken;
-        const ver = FB_CONFIG.version || 'v21.0';
-        const url = `https://graph.facebook.com/${ver}/me/permissions?access_token=${encodeURIComponent(token)}`;
-        fetch(url)
-          .then((r) => r.json())
-          .then((perms) => {
-            if (perms.error) return resolve(null);
-            const granted = (perms.data || [])
-              .filter((p) => p.status === 'granted')
-              .map((p) => p.permission);
-            const missing = REQUIRED_SCOPES.filter((s) => !granted.includes(s));
-            if (missing.length > 0) return resolve(null);
-            resolve(res.authResponse);
-          })
-          .catch(() => resolve(null));
+        resolve(res.authResponse);
       });
     });
   }
 
-  async function verifyGrantedScopes() {
-    const perms = await GraphAPI.getPermissionStatus();
-    const missing = REQUIRED_SCOPES.filter((s) => !perms.granted.includes(s));
+  async function verifyGrantedScopes(authResponse) {
+    let granted = scopesFromGrantedString(authResponse?.grantedScopes);
+    if (!granted.length) {
+      const perms = await GraphAPI.getPermissionStatus();
+      granted = perms.granted;
+    }
+    const missing = REQUIRED_SCOPES.filter((s) => !granted.includes(s));
     if (missing.length) {
       throw new Error(
         `Missing permissions: ${missing.join(', ')}. Log in again and tap Allow for every permission (especially pages_read_engagement).`
       );
     }
-    return perms;
+    return { granted };
   }
 
   function login(options = {}) {
     return new Promise((resolve, reject) => {
+      const loginOptions = {
+        scope: FB_CONFIG.scopes,
+        return_scopes: true,
+      };
+      if (options.reauthorize) loginOptions.auth_type = 'reauthorize';
+      else if (options.rerequest) loginOptions.auth_type = 'rerequest';
+
       FB.login(
         (res) => {
           if (res.authResponse) {
-            res.authResponse.grantedScopes = res.authResponse.grantedScopes || '';
-            verifyGrantedScopes()
+            verifyGrantedScopes(res.authResponse)
               .then(() => resolve(res.authResponse))
               .catch(reject);
             return;
@@ -117,11 +120,7 @@ const Auth = (function () {
             )
           );
         },
-        {
-          scope: FB_CONFIG.scopes,
-          return_scopes: true,
-          auth_type: options.reauthorize ? 'reauthorize' : 'rerequest',
-        }
+        loginOptions
       );
     });
   }
@@ -132,6 +131,7 @@ const Auth = (function () {
 
   function logout() {
     return new Promise((resolve) => {
+      GraphAPI.clearPermissionCache?.();
       if (ready) FB.logout(() => resolve());
       else resolve();
     });
@@ -152,7 +152,7 @@ const Auth = (function () {
 
   /** Ask Facebook again for all permissions (e.g. after adding pages_read_engagement) */
   function rerequestPermissions() {
-    return login({ reauthorize: true });
+    return login({ rerequest: true });
   }
 
   return {

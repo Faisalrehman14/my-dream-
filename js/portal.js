@@ -7,6 +7,7 @@
   let pages = [];
   let activePage = null;
   let engagementCache = null;
+  let loginInFlight = false;
 
   const VIEW_TITLES = {
     dashboard: 'Dashboard',
@@ -180,11 +181,13 @@
   }
 
   async function onLogin() {
+    if (loginInFlight) return;
     try {
       if (!Auth.getAppId()) {
         toast('App not configured yet', true);
         return;
       }
+      loginInFlight = true;
       setLoginLoading(true);
       await Auth.initSDK();
       setStatus('Opening Facebook…');
@@ -192,9 +195,13 @@
       await enterApp(await Auth.login());
     } catch (e) {
       setStatus('Could not sign in', true);
-      showHelp(e.message);
+      const help = e.rateLimited
+        ? `${e.message} If you were testing login many times, Facebook temporarily blocks the app.`
+        : e.message;
+      showHelp(help);
       toast(e.message, true);
     } finally {
+      loginInFlight = false;
       setLoginLoading(false);
     }
   }
@@ -268,7 +275,6 @@
     Inbox.startPolling(page);
     updateDashboard();
     Utility.loadTemplateForm?.(page);
-    Utility.prepare?.(page).catch(() => {});
   }
 
   function updateTopbarPage(page) {
