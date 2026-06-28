@@ -95,7 +95,8 @@ const GraphAPI = (function () {
     let msg = e.error_user_msg || e.message || JSON.stringify(e);
     if (e.code === 4) {
       msg =
-        'Facebook app request limit reached. Wait 15–30 minutes, then try once. Do not tap Continue repeatedly.';
+        'Facebook app request limit reached. Wait 15–30 minutes, then try once. ' +
+        'Do not tap Continue or Send repeatedly.';
     }
     const err = new Error(msg);
     err.code = e.code;
