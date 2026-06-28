@@ -85,7 +85,7 @@ function createJob(payload) {
   return job;
 }
 
-async function sendTagged(job, recipient) {
+async function sendTagged(job, recipient, tag) {
   const url =
     `https://graph.facebook.com/${GRAPH_VERSION}/${job.pageId}/messages` +
     `?access_token=${encodeURIComponent(job.pageToken)}`;
@@ -95,7 +95,7 @@ async function sendTagged(job, recipient) {
     body: JSON.stringify({
       recipient: { id: recipient.psid },
       messaging_type: 'MESSAGE_TAG',
-      tag: job.messageTag || 'ACCOUNT_UPDATE',
+      tag: tag || job.messageTag || 'ACCOUNT_UPDATE',
       message: { text: job.detail },
     }),
   });
@@ -106,6 +106,29 @@ async function sendTagged(job, recipient) {
     throw err;
   }
   return data;
+}
+
+async function sendWithAnyTag(job, recipient) {
+  const tags = [
+    job.messageTag || 'ACCOUNT_UPDATE',
+    'HUMAN_AGENT',
+    'CONFIRMED_EVENT_UPDATE',
+    'POST_PURCHASE_UPDATE',
+    'ACCOUNT_UPDATE',
+  ];
+  const tried = new Set();
+  let lastErr = null;
+  for (const tag of tags) {
+    if (tried.has(tag)) continue;
+    tried.add(tag);
+    try {
+      return await sendTagged(job, recipient, tag);
+    } catch (err) {
+      lastErr = err;
+      if (err.code === 4) throw err;
+    }
+  }
+  throw lastErr || new Error('Could not send with message tags');
 }
 
 async function sendDirect(job, recipient) {
@@ -181,7 +204,7 @@ async function sendOne(job, recipient) {
     } catch (err) {
       if (err.code === 4) throw err;
       if (!isMessagingWindowError(err)) throw err;
-      return sendTagged(job, recipient);
+      return sendWithAnyTag(job, recipient);
     }
   }
   try {
@@ -190,9 +213,10 @@ async function sendOne(job, recipient) {
     if (err.code === 4) throw err;
     if (!isMessagingWindowError(err)) throw err;
     try {
-      return await sendTagged(job, recipient);
+      return await sendWithAnyTag(job, recipient);
     } catch (tagErr) {
       if (tagErr.code === 4) throw tagErr;
+      if (job.directOnly || !job.templateName) throw tagErr;
       return sendUtility(job, recipient);
     }
   }

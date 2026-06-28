@@ -23,7 +23,11 @@ const Utility = (function () {
     'POST_PURCHASE_UPDATE',
     'CONFIRMED_EVENT_UPDATE',
     'ACCOUNT_UPDATE',
+    'HUMAN_AGENT',
   ]);
+
+  /** pageId -> template object, or false when none available (avoid repeat API calls) */
+  const templateCache = new Map();
 
   const MARKETING_WORDS = /\b(sale|discount|offer|free|buy now|click here|limited time|promo|deal|win|% off|subscribe now)\b/i;
 
@@ -126,7 +130,11 @@ const Utility = (function () {
   async function findOwnedCustomTemplate(pageId, pageToken) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
     const owned = list.filter((t) => t.status === 'APPROVED' && isOwnedCustomTemplate(t.name));
-    return owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) || null;
+    return (
+      owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
+      owned.sort((a, b) => String(b.name).localeCompare(String(a.name)))[0] ||
+      null
+    );
   }
 
   async function waitForTemplateApproval(pageId, pageToken, name, attempts = 8) {
@@ -250,18 +258,27 @@ const Utility = (function () {
     }
 
     const err = new Error(
-      lastError?.message ||
-        'Template backup unavailable — you can still send using direct Messenger text.'
+      lastError?.message || 'No utility template is approved on this Page yet.'
     );
     err.templateOptional = true;
     throw err;
   }
 
   async function getTemplateIfAvailable(page, categoryKey) {
+    const cacheKey = `${page.id}:${categoryKey || 'any'}`;
+    if (templateCache.has(cacheKey)) {
+      const cached = templateCache.get(cacheKey);
+      return cached || null;
+    }
     try {
-      return await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+      const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+      templateCache.set(cacheKey, tpl);
+      return tpl;
     } catch (err) {
-      if (err.templateOptional || err.code === 4) return null;
+      if (err.templateOptional || err.code === 4) {
+        templateCache.set(cacheKey, false);
+        return null;
+      }
       throw err;
     }
   }
@@ -281,11 +298,29 @@ const Utility = (function () {
     return err?.message || fallback;
   }
 
-  async function sendWithTag(page, psid, msg, categoryKey) {
-    const tag = resolveMessageTag(categoryKey);
-    const result = await GraphAPI.sendTaggedMessage(page.id, page.access_token, psid, msg, tag);
-    rememberPreview(page.id, psid, msg);
-    return result;
+  async function sendWithAnyTag(page, psid, msg, categoryKey) {
+    const tags = [
+      resolveMessageTag(categoryKey),
+      'HUMAN_AGENT',
+      'CONFIRMED_EVENT_UPDATE',
+      'POST_PURCHASE_UPDATE',
+      'ACCOUNT_UPDATE',
+    ];
+    const tried = new Set();
+    let lastErr = null;
+    for (const tag of tags) {
+      if (tried.has(tag)) continue;
+      tried.add(tag);
+      try {
+        const result = await GraphAPI.sendTaggedMessage(page.id, page.access_token, psid, msg, tag);
+        rememberPreview(page.id, psid, msg);
+        return result;
+      } catch (err) {
+        lastErr = err;
+        if (isRateLimitError(err)) throw err;
+      }
+    }
+    throw lastErr || new Error('Could not send with message tags');
   }
 
   function isMessagingWindowError(err) {
@@ -302,7 +337,12 @@ const Utility = (function () {
   }
 
   async function sendViaUtility(page, psid, msg, categoryKey) {
-    const tpl = await ensureOwnedTemplate(page.id, page.access_token, categoryKey);
+    const tpl = await getTemplateIfAvailable(page, categoryKey);
+    if (!tpl) {
+      const err = new Error('No utility template is approved on this Page yet.');
+      err.templateOptional = true;
+      throw err;
+    }
     readyTemplates.set(categoryKey || 'custom', tpl);
     const result = await GraphAPI.sendUtilityTemplateMessage(page.id, page.access_token, psid, {
       name: tpl.name,
@@ -368,21 +408,22 @@ const Utility = (function () {
     const error = validateMessage(msg);
     if (error) throw new Error(error);
 
+    let lastDeliveryErr = null;
+
     if (options.forceUtility !== true) {
       try {
         const result = await GraphAPI.sendMessage(page.id, page.access_token, psid, msg);
         rememberPreview(page.id, psid, msg);
         return result;
       } catch (err) {
+        lastDeliveryErr = err;
         if (isRateLimitError(err)) throw err;
         if (!isMessagingWindowError(err)) throw err;
         try {
-          return await sendWithTag(page, psid, msg, categoryKey);
+          return await sendWithAnyTag(page, psid, msg, categoryKey);
         } catch (tagErr) {
+          lastDeliveryErr = tagErr;
           if (isRateLimitError(tagErr)) throw tagErr;
-          if (!isMessagingWindowError(tagErr)) {
-            /* try utility template next */
-          }
         }
       }
     }
@@ -391,15 +432,13 @@ const Utility = (function () {
       return await sendViaUtility(page, psid, msg, categoryKey);
     } catch (err) {
       if (isRateLimitError(err)) throw err;
-      if (err.templateOptional) {
-        throw new Error(
-          deliveryErrorMessage(
-            err,
-            'Could not deliver to this customer. Ask them to message your Page first, then try again.'
-          )
-        );
-      }
-      throw err;
+      const root = lastDeliveryErr || err;
+      throw new Error(
+        deliveryErrorMessage(
+          root,
+          'Could not deliver. Ask the customer to message your Page first, then try again.'
+        )
+      );
     }
   }
 
@@ -500,6 +539,7 @@ const Utility = (function () {
     preparedPageId = null;
     preparePromise = null;
     readyTemplates.clear();
+    templateCache.clear();
   }
 
   function getActiveCategoryKey() {
