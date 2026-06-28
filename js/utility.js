@@ -1,21 +1,21 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v9';
+  const TEMPLATE_VERSION = 'v8';
 
-  /** User's full composed message (name + lines) goes in {{1}} — no extra wrapper text. */
+  /** Meta-safe template bodies to try (user's full text goes in {{1}}). */
   const TEMPLATE_BODIES = [
     {
-      bodyText: '{{1}}',
-      example: 'Muhammad are you there?\nWe are here for you today.',
+      bodyText: 'Your update: {{1}}. Thank you.',
+      example: 'Hello, we are here for you.',
     },
     {
-      bodyText: 'Update:\n{{1}}',
-      example: 'Muhammad are you there?\nWe are here for you today.',
+      bodyText: 'Notification: {{1}} Reply if you need help.',
+      example: 'Your appointment is confirmed for today.',
     },
     {
-      bodyText: 'Message:\n{{1}}',
-      example: 'Muhammad are you there?\nWe are here for you today.',
+      bodyText: 'Message from our page: {{1}}.',
+      example: 'We are here for you today.',
     },
   ];
 
@@ -46,56 +46,25 @@ const Utility = (function () {
     };
   }
 
-  function firstName(fullName) {
-    const n = String(fullName || '').trim();
-    if (!n || n.startsWith('—')) return '';
-    return n.split(/\s+/)[0];
-  }
-
-  /** Customer sees: "Muhammad are you there?" then optional second line below. */
-  function composeCustomerMessage(customerName, opening, body) {
-    const first = firstName(customerName);
-    const open = String(opening || '').trim();
-    const main = String(body || '').trim();
-    const lines = [];
-
-    if (open) {
-      lines.push(first ? `${first} ${open}` : open);
-    } else if (first && main) {
-      lines.push(first);
-    }
-    if (main) lines.push(main);
-
-    return lines.join('\n').trim();
-  }
-
-  function validateNotification(opening, body) {
-    const open = String(opening || '').trim();
-    const main = String(body || '').trim();
-    if (!open && !main) return 'Enter an opening line or message below.';
-    const combined = composeCustomerMessage('Customer', open, main);
-    if (combined.includes('{{1}}')) return 'Just type your message normally — do not use {{1}}.';
-    if (MARKETING_WORDS.test(combined)) {
+  function validateMessage(text) {
+    const msg = String(text || '').trim();
+    if (!msg) return 'Enter your notification message.';
+    if (msg.includes('{{1}}')) return 'Just type your message normally — do not use {{1}}.';
+    if (MARKETING_WORDS.test(msg)) {
       return 'Meta rejects promotional words. Use friendly updates only (no sales/offers).';
     }
-    if (combined.length > 640) return 'Message is too long (max 640 characters).';
+    if (msg.length > 640) return 'Message is too long (max 640 characters).';
     return '';
   }
 
-  function validateMessage(text) {
-    return validateNotification('', text);
-  }
-
   function getSavedDraft(pageId) {
-    const row = getCustomTemplatesState()[pageId] || {};
-    return { opening: row._draftOpening || '', body: row._draft || '' };
+    return getCustomTemplatesState()[pageId]?._draft || '';
   }
 
-  function saveDraft(pageId, opening, body) {
+  function saveDraft(pageId, text) {
     const state = getCustomTemplatesState();
     if (!state[pageId]) state[pageId] = {};
-    state[pageId]._draftOpening = String(opening || '').trim();
-    state[pageId]._draft = String(body || '').trim();
+    state[pageId]._draft = text.trim();
     saveCustomTemplatesState(state);
   }
 
@@ -140,17 +109,11 @@ const Utility = (function () {
     return list.find((t) => t.name === name) || null;
   }
 
-  async function findOwnedCustomTemplate(pageId, pageToken) {
+  async function findAnyApprovedTemplate(pageId, pageToken) {
     const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
-    const owned = list.filter(
-      (t) =>
-        t.status === 'APPROVED' &&
-        t.name.startsWith('pagechat_') &&
-        !t.name.includes('_lib_')
-    );
     return (
-      owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) ||
-      owned.find((t) => t.name.includes('_custom_')) ||
+      list.find((t) => t.status === 'APPROVED' && t.name.startsWith('pagechat_')) ||
+      list.find((t) => t.status === 'APPROVED' && String(t.name || '').includes('pagechat')) ||
       null
     );
   }
@@ -250,8 +213,8 @@ const Utility = (function () {
     return null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, _categoryKey) {
-    const approvedExisting = await findOwnedCustomTemplate(pageId, pageToken);
+  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
+    const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken);
     if (approvedExisting) {
       return normalizeOwned(approvedExisting.name, getTemplateDef());
     }
@@ -272,6 +235,14 @@ const Utility = (function () {
           lastError = err;
           if (err.code === 4 || err.rateLimited) throw err;
         }
+      }
+    }
+
+    for (const key of ['CONFIRMED_EVENT_UPDATE', 'POST_PURCHASE_UPDATE', 'ACCOUNT_UPDATE']) {
+      const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
+      if (libraryTpl) {
+        showStatus('Using Meta pre-approved notification template.', true);
+        return libraryTpl;
       }
     }
 
@@ -366,12 +337,12 @@ const Utility = (function () {
     }
   }
 
-  async function send(page, psid, opening, body, categoryKey, options = {}) {
+  async function send(page, psid, text, categoryKey, options = {}) {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
-    if (!psid) throw new Error('Select a customer');
+    if (!psid || !text?.trim()) throw new Error('Select a customer and enter a message');
 
-    const msg = composeCustomerMessage(options.customerName, opening, body);
-    const error = validateNotification(opening, body);
+    const msg = text.trim();
+    const error = validateMessage(msg);
     if (error) throw new Error(error);
 
     if (options.forceUtility !== true) {
@@ -396,14 +367,13 @@ const Utility = (function () {
     }
   }
 
-  async function sendToAll(page, recipients, opening, body, categoryKey, options = {}) {
+  async function sendToAll(page, recipients, text, categoryKey, options = {}) {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
-    const error = validateNotification(opening, body);
-    if (error) throw new Error(error);
+    if (!text?.trim()) throw new Error('Enter a message');
     if (!recipients?.length) throw new Error('No subscribers found in your inbox');
 
     if (recipients.length >= 10) {
-      return startBulkCampaign(page, recipients, opening, body, categoryKey, options);
+      return startBulkCampaign(page, recipients, text, categoryKey, options);
     }
 
     const { onProgress, delayMs = 2500 } = options;
@@ -413,7 +383,7 @@ const Utility = (function () {
       const { psid, name } = recipients[i];
       onProgress?.({ current: i + 1, total: recipients.length, name });
       try {
-        await send(page, psid, opening, body, categoryKey, { customerName: name });
+        await send(page, psid, text, categoryKey, { customerName: name });
         results.sent++;
       } catch (err) {
         if (err.code === 4 || err.rateLimited) {
@@ -432,7 +402,8 @@ const Utility = (function () {
     return results;
   }
 
-  async function startBulkCampaign(page, recipients, opening, body, categoryKey, options = {}) {
+  async function startBulkCampaign(page, recipients, text, categoryKey, options = {}) {
+    const detail = text.trim();
     const tpl = await getTemplateIfAvailable(page, categoryKey);
     options.onProgress?.({
       current: 0,
@@ -444,8 +415,7 @@ const Utility = (function () {
       pageToken: page.access_token,
       templateName: tpl?.name || '',
       language: tpl?.language || 'en',
-      opening: String(opening || '').trim(),
-      detail: String(body || '').trim(),
+      detail,
       directOnly: !tpl,
       recipients,
     });
@@ -511,46 +481,35 @@ const Utility = (function () {
     }
   }
 
-  function updateLivePreview(page, _categoryKey) {
+  function updateLivePreview(_page, _categoryKey) {
     const preview = document.getElementById('utility-template-preview');
-    const opening = document.getElementById('utility-opening')?.value?.trim();
     const msg = document.getElementById('utility-message')?.value?.trim();
-    const sel = document.getElementById('utility-recipient');
-    let name = 'Muhammad';
-    if (sel?.value && sel.selectedIndex >= 0) {
-      const label = sel.options[sel.selectedIndex]?.text?.trim() || '';
-      name = firstName(label) || 'Muhammad';
-    }
     if (!preview) return;
-    preview.textContent = composeCustomerMessage(name, opening, msg) || 'Muhammad are you there?\nwe are here for you';
+    preview.textContent = msg || 'we are here for you';
   }
 
   function loadTemplateForm(page) {
-    const openingInput = document.getElementById('utility-opening');
     const input = document.getElementById('utility-message');
-    const draft = getSavedDraft(page?.id);
-    if (openingInput) openingInput.value = draft.opening;
-    if (input) input.value = draft.body;
+    if (!input) return;
+    input.value = getSavedDraft(page?.id) || '';
     setTemplateFormError('');
     updateLivePreview(page, getActiveCategoryKey());
   }
 
   function updateTemplateForm(page) {
-    const openingInput = document.getElementById('utility-opening');
     const input = document.getElementById('utility-message');
-    if (!page?.id) return;
-    const error = validateNotification(openingInput?.value, input?.value);
+    if (!input || !page?.id) return;
+    const error = validateMessage(input.value);
     setTemplateFormError(error);
     updateLivePreview(page, getActiveCategoryKey());
-    if (!error) saveDraft(page.id, openingInput?.value, input?.value);
+    if (!error) saveDraft(page.id, input.value);
   }
 
   function ensureTemplateFormValid(page) {
-    const opening = document.getElementById('utility-opening')?.value || '';
     const msg = document.getElementById('utility-message')?.value || '';
-    const error = validateNotification(opening, msg);
+    const error = validateMessage(msg);
     if (error) throw new Error(error);
-    saveDraft(page.id, opening, msg);
+    saveDraft(page.id, msg);
     return getTemplateDef();
   }
 
