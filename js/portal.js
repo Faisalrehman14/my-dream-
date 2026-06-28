@@ -138,6 +138,10 @@
     document.getElementById('btn-refresh-posts')?.addEventListener('click', refreshEngagement);
     document.getElementById('composer-form')?.addEventListener('submit', onSendReply);
     document.getElementById('utility-form')?.addEventListener('submit', onSendUtility);
+    document.querySelectorAll('input[name="utility-send-mode"]').forEach((radio) => {
+      radio.addEventListener('change', updateUtilitySendMode);
+    });
+    updateUtilitySendMode();
     document.getElementById('sidebar-toggle')?.addEventListener('click', toggleSidebar);
     document.getElementById('dash-view-all-inbox')?.addEventListener('click', () => switchView('inbox'));
 
@@ -250,6 +254,7 @@
     } catch (e) {
       toast('Inbox: ' + e.message, true);
     }
+    updateUtilitySendMode();
     Inbox.startPolling(page);
     updateDashboard();
     Utility.prepare?.(page).catch(() => {});
@@ -455,6 +460,26 @@
     }
   }
 
+  function isUtilityBulkMode() {
+    return document.querySelector('input[name="utility-send-mode"]:checked')?.value === 'all';
+  }
+
+  function updateUtilitySendMode() {
+    const bulk = isUtilityBulkMode();
+    const field = document.getElementById('utility-recipient-field');
+    const sel = document.getElementById('utility-recipient');
+    const btn = document.getElementById('utility-submit-btn');
+    const count = Number(document.getElementById('utility-subscriber-count')?.textContent || 0);
+    if (field) field.classList.toggle('hidden', bulk);
+    if (sel) sel.required = !bulk;
+    if (btn) {
+      btn.textContent = bulk
+        ? `Send to all subscribers (${count})`
+        : 'Send notification';
+      btn.disabled = bulk && count === 0;
+    }
+  }
+
   async function onSendUtility(e) {
     e.preventDefault();
     const sel = document.getElementById('utility-recipient');
@@ -462,22 +487,55 @@
     const text = document.getElementById('utility-body').value.trim();
     const tag = document.getElementById('utility-tag').value;
     const customerName = sel?.options[sel.selectedIndex]?.text?.trim();
-    const btn = e.target.querySelector('button[type="submit"]');
-    if (!psid || !text) {
+    const btn = document.getElementById('utility-submit-btn');
+    const bulk = isUtilityBulkMode();
+
+    if (!text) {
+      Utility.showStatus('Enter a message.', false);
+      return;
+    }
+    if (!bulk && !psid) {
       Utility.showStatus('Select a customer and enter a message.', false);
       return;
     }
+
+    const recipients = bulk ? Inbox.getUtilityRecipients?.(activePage?.id) || [] : [];
+    if (bulk && !recipients.length) {
+      Utility.showStatus('No subscribers found. Customers must message your Page first.', false);
+      return;
+    }
+    if (bulk) {
+      const ok = confirm(
+        `Send this notification to all ${recipients.length} subscriber${recipients.length === 1 ? '' : 's'}?`
+      );
+      if (!ok) return;
+    }
+
     if (btn) btn.disabled = true;
     try {
-      await Utility.send(activePage, psid, text, tag, { customerName });
-      Utility.showStatus('Notification sent successfully.', true);
-      toast('Notification sent');
+      if (bulk) {
+        const result = await Utility.sendToAll(activePage, recipients, text, tag, {
+          onProgress({ current, total, name }) {
+            Utility.showStatus(`Sending ${current} of ${total}… (${name})`, true, true);
+          },
+        });
+        let msg = `Sent to ${result.sent} of ${result.total} subscriber${result.total === 1 ? '' : 's'}.`;
+        if (result.failed.length) {
+          msg += ` ${result.failed.length} failed.`;
+        }
+        Utility.showStatus(msg, result.sent > 0);
+        toast(msg);
+      } else {
+        await Utility.send(activePage, psid, text, tag, { customerName });
+        Utility.showStatus('Notification sent successfully.', true);
+        toast('Notification sent');
+      }
       Inbox.refresh?.(activePage, { forceMessages: true });
     } catch (err) {
       Utility.showStatus(err.message, false);
       toast(err.message, true);
     } finally {
-      if (btn) btn.disabled = false;
+      updateUtilitySendMode();
     }
   }
 
@@ -522,7 +580,10 @@
     }
     if (name === 'settings') refreshPageMeta();
     if (name === 'dashboard') updateDashboard();
-    if (name === 'utility' && activePage) Utility.prepare?.(activePage).catch(() => {});
+    if (name === 'utility' && activePage) {
+      Utility.prepare?.(activePage).catch(() => {});
+      updateUtilitySendMode();
+    }
   }
 
   function refreshPageMeta() {

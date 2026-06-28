@@ -1420,6 +1420,23 @@ code { background: #e4e6eb; padding: 2px 6px; border-radius: 4px; font-size: .82
 }
 .portal-form-field textarea { margin-bottom: 16px; resize: vertical; }
 
+.utility-send-mode {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px;
+}
+.utility-mode-option {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border: 1.5px solid var(--border);
+  border-radius: 8px; cursor: pointer; font-size: .9rem;
+  background: var(--bg);
+}
+.utility-mode-option:has(input:checked) {
+  border-color: var(--primary); background: rgba(37, 99, 235, .06);
+}
+.utility-mode-option input { margin: 0; }
+.field-label {
+  display: block; font-size: .85rem; font-weight: 600; margin-bottom: 6px;
+}
+
 .portal-settings-content { padding: 0 28px 28px; }
 .portal-settings-grid {
   display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));

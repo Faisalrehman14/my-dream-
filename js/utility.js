@@ -228,6 +228,32 @@ const Utility = (function () {
     return result;
   }
 
+  async function sendToAll(page, recipients, text, categoryKey, options = {}) {
+    if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
+    if (!text?.trim()) throw new Error('Enter a message');
+    if (!recipients?.length) throw new Error('No subscribers found in your inbox');
+
+    const { onProgress, delayMs = 400 } = options;
+    const results = { sent: 0, failed: [], total: recipients.length };
+
+    for (let i = 0; i < recipients.length; i++) {
+      const { psid, name } = recipients[i];
+      onProgress?.({ current: i + 1, total: recipients.length, name });
+      try {
+        await send(page, psid, text, categoryKey, { customerName: name });
+        results.sent++;
+      } catch (err) {
+        results.failed.push({ psid, name, error: err.message });
+      }
+      if (i < recipients.length - 1) await sleep(delayMs);
+    }
+
+    if (!results.sent && results.failed.length) {
+      throw new Error(results.failed[0].error || 'Could not send notifications');
+    }
+    return results;
+  }
+
   function showStatus(msg, ok, loading) {
     const el = document.getElementById('utility-status');
     if (!el) return;
@@ -248,5 +274,5 @@ const Utility = (function () {
     readyTemplates.clear();
   }
 
-  return { prepare, send, getPreview, showStatus, hideStatus, reset };
+  return { prepare, send, sendToAll, getPreview, showStatus, hideStatus, reset };
 })();

@@ -535,23 +535,41 @@ const Inbox = (function () {
     refresh(page, { forceMessages: true }).catch(() => {});
   }
 
+  function collectUtilityRecipients(convs, pageId) {
+    const seen = new Set();
+    const list = [];
+    convs.forEach((c) => {
+      const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
+      if (!cust?.id || seen.has(cust.id)) return;
+      seen.add(cust.id);
+      list.push({
+        psid: cust.id,
+        name: cust.name || cust.email || cust.id,
+      });
+    });
+    return list;
+  }
+
+  function getUtilityRecipients(pageId) {
+    return collectUtilityRecipients(conversations, pageId || activePageId);
+  }
+
   function populateUtilityRecipients(convs, pageId, callback) {
     const sel = document.getElementById('utility-recipient');
     if (!sel) return;
     const prev = sel.value;
     sel.innerHTML = '<option value="">— Select customer —</option>';
-    const seen = new Set();
-    convs.forEach((c) => {
-      const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
-      if (!cust?.id || seen.has(cust.id)) return;
-      seen.add(cust.id);
+    const recipients = collectUtilityRecipients(convs, pageId);
+    recipients.forEach(({ psid, name }) => {
       const opt = document.createElement('option');
-      opt.value = cust.id;
-      opt.textContent = cust.name || cust.email || cust.id;
+      opt.value = psid;
+      opt.textContent = name;
       sel.appendChild(opt);
     });
     if (prev) sel.value = prev;
-    if (callback) callback(seen);
+    const countEl = document.getElementById('utility-subscriber-count');
+    if (countEl) countEl.textContent = String(recipients.length);
+    if (callback) callback(new Set(recipients.map((r) => r.psid)));
   }
 
   function updateUnreadBadge(n) {
@@ -661,6 +679,7 @@ const Inbox = (function () {
     stopPolling,
     setInboxViewActive,
     getConversations,
+    getUtilityRecipients,
     getUnreadCount,
     openConversation,
   };

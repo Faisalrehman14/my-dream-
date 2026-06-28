@@ -293,8 +293,22 @@
           </header>
           <div class="utility-content portal-utility-content">
             <form class="utility-form portal-utility-form" id="utility-form">
+              <div class="portal-form-field">
+                <span class="field-label">Send to</span>
+                <div class="utility-send-mode" role="radiogroup" aria-label="Send to">
+                  <label class="utility-mode-option">
+                    <input type="radio" name="utility-send-mode" value="single" checked>
+                    Single customer
+                  </label>
+                  <label class="utility-mode-option">
+                    <input type="radio" name="utility-send-mode" value="all">
+                    All subscribers (<span id="utility-subscriber-count">0</span>)
+                  </label>
+                </div>
+                <p class="form-hint">Subscribers are customers who have already messaged your Page.</p>
+              </div>
               <div class="portal-form-row">
-                <div class="portal-form-field">
+                <div class="portal-form-field" id="utility-recipient-field">
                   <label for="utility-recipient">Customer</label>
                   <select id="utility-recipient">
                     <option value="">— Select customer —</option>
@@ -314,7 +328,7 @@
                 <textarea id="utility-body" rows="4" placeholder="scheduled to arrive on 10 May"></textarea>
                 <p class="form-hint">Enter the update detail only — it is inserted into the sentence. Example for shipping: <em>scheduled to arrive on 10 May</em></p>
               </div>
-              <button type="submit" class="btn-primary">Send notification</button>
+              <button type="submit" class="btn-primary" id="utility-submit-btn">Send notification</button>
             </form>
             <div id="utility-status" class="status-msg hidden"></div>
           </div>
