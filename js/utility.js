@@ -1,21 +1,21 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v8';
+  const TEMPLATE_VERSION = 'v9';
 
-  /** Meta-safe template bodies to try (user's full text goes in {{1}}). */
+  /** Full custom text in {{1}} — no "account update" or other Meta library wrappers. */
   const TEMPLATE_BODIES = [
     {
-      bodyText: 'Your update: {{1}}. Thank you.',
-      example: 'Hello, we are here for you.',
+      bodyText: '{{1}}',
+      example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: 'Notification: {{1}} Reply if you need help.',
-      example: 'Your appointment is confirmed for today.',
+      bodyText: 'Update:\n{{1}}',
+      example: 'Are you there? We are here for you.',
     },
     {
-      bodyText: 'Message from our page: {{1}}.',
-      example: 'We are here for you today.',
+      bodyText: 'Message:\n{{1}}',
+      example: 'Are you there? We are here for you.',
     },
   ];
 
@@ -109,13 +109,18 @@ const Utility = (function () {
     return list.find((t) => t.name === name) || null;
   }
 
-  async function findAnyApprovedTemplate(pageId, pageToken) {
-    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+  function isOwnedCustomTemplate(name) {
     return (
-      list.find((t) => t.status === 'APPROVED' && t.name.startsWith('pagechat_')) ||
-      list.find((t) => t.status === 'APPROVED' && String(t.name || '').includes('pagechat')) ||
-      null
+      String(name || '').startsWith('pagechat_') &&
+      String(name).includes('_custom_') &&
+      !String(name).includes('_lib_')
     );
+  }
+
+  async function findOwnedCustomTemplate(pageId, pageToken) {
+    const list = await GraphAPI.getPageMessageTemplates(pageId, pageToken, { limit: 100 });
+    const owned = list.filter((t) => t.status === 'APPROVED' && isOwnedCustomTemplate(t.name));
+    return owned.find((t) => t.name.startsWith(`pagechat_${TEMPLATE_VERSION}_custom_`)) || null;
   }
 
   async function waitForTemplateApproval(pageId, pageToken, name, attempts = 8) {
@@ -213,8 +218,8 @@ const Utility = (function () {
     return null;
   }
 
-  async function ensureOwnedTemplate(pageId, pageToken, categoryKey) {
-    const approvedExisting = await findAnyApprovedTemplate(pageId, pageToken);
+  async function ensureOwnedTemplate(pageId, pageToken, _categoryKey) {
+    const approvedExisting = await findOwnedCustomTemplate(pageId, pageToken);
     if (approvedExisting) {
       return normalizeOwned(approvedExisting.name, getTemplateDef());
     }
@@ -235,14 +240,6 @@ const Utility = (function () {
           lastError = err;
           if (err.code === 4 || err.rateLimited) throw err;
         }
-      }
-    }
-
-    for (const key of ['CONFIRMED_EVENT_UPDATE', 'POST_PURCHASE_UPDATE', 'ACCOUNT_UPDATE']) {
-      const libraryTpl = await tryMetaLibraryTemplate(pageId, pageToken, key);
-      if (libraryTpl) {
-        showStatus('Using Meta pre-approved notification template.', true);
-        return libraryTpl;
       }
     }
 
@@ -284,7 +281,7 @@ const Utility = (function () {
       language: { code: tpl.language || 'en' },
       components: [{ type: 'body', parameters: [{ type: 'text', text: msg }] }],
     });
-    rememberPreview(page.id, psid, msg, { body: msg });
+    rememberPreview(page.id, psid, msg);
     return result;
   }
 
@@ -310,11 +307,9 @@ const Utility = (function () {
     }
   }
 
-  function rememberPreview(pageId, psid, text, tpl) {
+  function rememberPreview(pageId, psid, text) {
     if (!pageId || !psid || !text) return;
-    const preview = tpl?.body
-      ? tpl.body.replace(/\{\{1\}\}/, text.trim())
-      : text.trim();
+    const preview = text.trim();
     try {
       const key = FB_CONFIG.storageKeys.utilityPreviews;
       const state = JSON.parse(localStorage.getItem(key) || '{}');
@@ -348,7 +343,7 @@ const Utility = (function () {
     if (options.forceUtility !== true) {
       try {
         const result = await GraphAPI.sendMessage(page.id, page.access_token, psid, msg);
-        rememberPreview(page.id, psid, msg, { body: msg });
+        rememberPreview(page.id, psid, msg);
         return result;
       } catch (err) {
         if (!isMessagingWindowError(err)) throw err;
