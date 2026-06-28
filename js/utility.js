@@ -32,7 +32,8 @@ const Utility = (function () {
     'Promotional/sales words avoid karein. App Meta ki official template library use karti hai.';
 
   function formatUtilityError(err) {
-    const msg = String(err?.message || '').toLowerCase();
+    const raw = String(err?.message || '').trim();
+    const msg = raw.toLowerCase();
     if (
       msg.includes('rejected') ||
       msg.includes('custom template') ||
@@ -42,10 +43,22 @@ const Utility = (function () {
       return (
         'Meta ne is format ko approve nahi kiya — yeh app ki fault nahi, Meta ki policy hai. ' +
         META_TERMS_HINT +
-        ' 2–3 min wait karke dubara Send karein.'
+        ' 2–3 min wait karke dubara Send karein.' +
+        (raw && !msg.includes('meta ne is format') ? ` (${raw})` : '')
       );
     }
-    return err?.message || 'Could not send notification.';
+    if (
+      msg.includes('template library') ||
+      msg.includes('library clone') ||
+      msg.includes('setup nahi ho saki')
+    ) {
+      return (
+        (raw || 'Meta template library se setup nahi ho saki.') +
+        ' Business Suite → Message templates check karein. ' +
+        META_TERMS_HINT
+      );
+    }
+    return raw || 'Could not send notification.';
   }
 
   const SAFE_LIBRARY_KEYS = [];
@@ -92,7 +105,7 @@ const Utility = (function () {
     if (!raw || !isApprovedStatus(raw.status)) return null;
     const enriched = await enrichTemplateRecord(pageId, pageToken, raw);
     const body = templateBodyFromApi(enriched);
-    if (!isSendableTemplateBody(body)) return null;
+    if (!isUsableTemplateBody(body)) return null;
     const norm = normalizeFromApi(enriched);
     assertSafeTemplate(norm);
     return norm;
@@ -121,11 +134,11 @@ const Utility = (function () {
     for (const raw of candidates.slice(0, 8)) {
       let body = templateBodyFromApi(raw);
       let tpl = raw;
-      if (!body || !isSendableTemplateBody(body)) {
+      if (!body || !isUsableTemplateBody(body)) {
         tpl = await enrichTemplateRecord(pageId, pageToken, raw);
         body = templateBodyFromApi(tpl);
       }
-      if (!isSendableTemplateBody(body)) continue;
+      if (!isUsableTemplateBody(body)) continue;
       const norm = normalizeFromApi(tpl);
       assertSafeTemplate(norm);
       return norm;
@@ -228,7 +241,7 @@ const Utility = (function () {
     }
     if (body && hasUnwantedWrapper(body)) return true;
     if (name.includes('_custom_') && body && !isSendableTemplateBody(body)) return true;
-    if (name.includes('pagechat_lib_minimal_') && body && isSendableTemplateBody(body)) return false;
+    if (name.includes('pagechat_lib_minimal_') && body && isUsableTemplateBody(body)) return false;
     return false;
   }
 
@@ -247,6 +260,23 @@ const Utility = (function () {
     if (!b || hasUnwantedWrapper(b)) return false;
     if (isExactMessageBody(b)) return true;
     return knownCustomBodyTexts().has(b);
+  }
+
+  function isGoodNewsWrapperBody(body) {
+    const b = String(body || '').trim();
+    if (hasUnwantedWrapper(b)) return false;
+    return /^Good news!\s*\{\{1\}\}/i.test(b);
+  }
+
+  function isUsableTemplateBody(body) {
+    if (isSendableTemplateBody(body)) return true;
+    if (isGoodNewsWrapperBody(body)) return true;
+    const b = String(body || '').trim();
+    if (!b || hasUnwantedWrapper(b)) return false;
+    const params = b.match(/\{\{\d+\}\}/g) || [];
+    if (params.length !== 1 || !b.includes('{{1}}')) return false;
+    const staticLen = b.replace(/\{\{\d+\}\}/g, '').trim().length;
+    return staticLen > 0 && staticLen <= 120;
   }
 
   /** Single {{1}} with short static text — used for Meta library clones. */
@@ -478,7 +508,7 @@ const Utility = (function () {
     }
     const norm = normalizeFromApi(raw);
     assertSafeTemplate(norm);
-    if (!isSendableTemplateBody(body)) {
+    if (!isUsableTemplateBody(body)) {
       const err = new Error('NOT_SENDABLE_TEMPLATE');
       err.notExact = true;
       err.templateBody = body;
@@ -532,7 +562,7 @@ const Utility = (function () {
       const fresh = fetched ? await enrichTemplateRecord(pageId, pageToken, fetched) : null;
       if (fresh && isApprovedStatus(fresh.status)) {
         const body = templateBodyFromApi(fresh);
-        if (!body || hasUnwantedWrapper(body) || !isSendableTemplateBody(body)) {
+        if (!body || hasUnwantedWrapper(body) || !isUsableTemplateBody(body)) {
           return null;
         }
         return normalizeFromApi(fresh);
@@ -611,15 +641,17 @@ const Utility = (function () {
     );
   }
 
-  function buildLibraryClonePayload(cloneName, pick) {
+  function buildLibraryClonePayload(cloneName, pick, { includeButtons = true } = {}) {
     const payload = {
       name: cloneName,
       category: 'UTILITY',
       language: parseTemplateLanguage(pick.language || 'en_US'),
       library_template_name: pick.name,
     };
-    const btnInputs = libraryButtonInputs(pick);
-    if (btnInputs) payload.library_template_button_inputs = btnInputs;
+    if (includeButtons) {
+      const btnInputs = libraryButtonInputs(pick);
+      if (btnInputs) payload.library_template_button_inputs = btnInputs;
+    }
     return payload;
   }
 
@@ -634,22 +666,26 @@ const Utility = (function () {
         }
       }
     };
-    try {
-      add(await GraphAPI.searchUtilityTemplateLibrary(pageToken, { limit: 50 }));
-    } catch {
-      /* ignore */
-    }
-    for (const q of ['good news', 'message', 'hello', 'support', 'reply', 'notification', 'update']) {
+    for (const lang of ['en_US', 'en']) {
       try {
-        add(
-          await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
-            name_or_content: q,
-            language: 'en',
-            limit: 25,
-          })
-        );
+        add(await GraphAPI.searchUtilityTemplateLibrary(pageToken, { limit: 50, language: lang }));
       } catch {
         /* ignore */
+      }
+    }
+    for (const q of ['good news', 'message', 'hello', 'support', 'reply', 'notification', 'update']) {
+      for (const lang of ['en_US', 'en']) {
+        try {
+          add(
+            await GraphAPI.searchUtilityTemplateLibrary(pageToken, {
+              name_or_content: q,
+              language: lang,
+              limit: 25,
+            })
+          );
+        } catch {
+          /* ignore */
+        }
       }
     }
     return collected;
@@ -662,66 +698,112 @@ const Utility = (function () {
     return String(pick?.body || fromComp || templateBodyFromApi(pick) || '').trim();
   }
 
-  function pickBestLibraryTemplate(list) {
-    let best = null;
-    let bestScore = -1;
-    for (const pick of list || []) {
-      const body = libraryPickBody(pick);
-      if (!isSendableTemplateBody(body)) continue;
-      const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
-      const btnCount = (pick?.buttons || []).length;
-      let score = 200 - staticLen - btnCount * 15;
-      if (body.toLowerCase().startsWith('good news') && !hasUnwantedWrapper(body)) score += 35;
-      if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 40;
-      if (body === '({{1}})' || body.startsWith('Message:')) score += 20;
-      if (score > bestScore) {
-        bestScore = score;
-        best = pick;
-      }
+  function isCloneableLibraryPick(pick) {
+    const body = libraryPickBody(pick);
+    if (!body || !/\{\{1\}\}/.test(body)) return false;
+    if (hasUnwantedWrapper(body)) return false;
+    const params = body.match(/\{\{\d+\}\}/g) || [];
+    if (params.length !== 1) return false;
+    const name = String(pick?.name || '').toLowerCase();
+    if (name.includes('post_purchase') || name.includes('account_update') || name.includes('order_confirm')) {
+      return false;
     }
-    return best;
+    if (/order|delivery|shipment|purchase|appointment|account/i.test(name) && !/^good news/i.test(body)) {
+      return false;
+    }
+    return true;
   }
 
-  async function tryMinimalLibraryClone(pageId, pageToken) {
-    const baseName = `pagechat_lib_minimal_${String(pageId).slice(-8)}`;
-    const libList = (await browseUtilityLibrary(pageToken)).filter(isSafeLibraryPick);
-    const pick = pickBestLibraryTemplate(libList);
-    if (!pick?.name) return null;
+  function scoreLibraryPick(pick) {
+    const body = libraryPickBody(pick);
+    if (!isCloneableLibraryPick(pick)) return -1;
+    const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
+    const btnCount = (pick?.buttons || []).length;
+    let score = 220 - staticLen - btnCount * 18;
+    if (/^good news!/i.test(body)) score += 55;
+    if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 45;
+    if (body === '({{1}})' || body.startsWith('Message:') || body.startsWith('Update:')) score += 25;
+    if (staticLen > 80) score -= 40;
+    return score;
+  }
 
-    const tryNames = [
-      baseName,
-      `${baseName}_${Date.now().toString(36).slice(-4)}`,
-    ];
+  function rankLibraryPicks(list) {
+    return [...(list || [])]
+      .map((pick) => ({ pick, score: scoreLibraryPick(pick) }))
+      .filter((row) => row.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((row) => row.pick);
+  }
 
-    for (const cloneName of tryNames) {
-      let existing = await findPageTemplate(pageId, pageToken, cloneName);
-      if (existing?.status === 'REJECTED') continue;
-      if (existing?.status === 'PENDING') {
-        existing = await waitForTemplateApproval(pageId, pageToken, cloneName, 15);
-      }
-      if (existing?.status === 'APPROVED') {
-        const enriched = await enrichTemplateRecord(pageId, pageToken, existing);
-        const norm = normalizeFromApi(enriched);
-        if (isSendableTemplateBody(norm.body)) return norm;
-        continue;
-      }
+  async function cloneLibraryPickToPage(pageId, pageToken, pick, cloneName) {
+    let existing = await findPageTemplate(pageId, pageToken, cloneName);
+    if (existing?.status === 'REJECTED') return { error: new Error('Library clone rejected by Meta.') };
+    if (existing?.status === 'PENDING') {
+      existing = await waitForTemplateApproval(pageId, pageToken, cloneName, 15);
+    }
+    if (existing?.status === 'APPROVED') {
+      const enriched = await enrichTemplateRecord(pageId, pageToken, existing);
+      const norm = normalizeFromApi(enriched);
+      if (isUsableTemplateBody(norm.body)) return { tpl: norm };
+      return { error: new Error('Approved library clone body is not usable.') };
+    }
 
+    let lastError = null;
+    for (const includeButtons of [false, true]) {
       try {
         await GraphAPI.cloneUtilityLibraryTemplate(
           pageId,
           pageToken,
-          buildLibraryClonePayload(cloneName, pick)
+          buildLibraryClonePayload(cloneName, pick, { includeButtons })
         );
         const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 15);
         if (approved?.status === 'APPROVED') {
           const enriched = await enrichTemplateRecord(pageId, pageToken, approved);
           const norm = normalizeFromApi(enriched);
-          if (isSendableTemplateBody(norm.body)) return norm;
+          if (isUsableTemplateBody(norm.body)) return { tpl: norm };
+          return { error: new Error('Approved library clone body is not usable.') };
+        }
+        if (approved?.status === 'REJECTED') {
+          lastError = new Error('Meta ne library template reject kar di.');
+          break;
         }
       } catch (err) {
+        lastError = err;
         if (err.code === 4 || err.rateLimited) throw err;
       }
     }
+    return { error: lastError || new Error('Library clone failed.') };
+  }
+
+  async function tryMinimalLibraryClone(pageId, pageToken) {
+    const baseName = `pagechat_lib_minimal_${String(pageId).slice(-8)}`;
+    const libList = (await browseUtilityLibrary(pageToken)).filter(isSafeLibraryPick);
+    const ranked = rankLibraryPicks(libList);
+    if (!ranked.length) {
+      const fallback = libList.filter(isCloneableLibraryPick);
+      ranked.push(...fallback);
+    }
+    if (!ranked.length) {
+      throw new Error(
+        'Meta template library mein koi suitable template nahi mila. Business Suite → Message templates check karein.'
+      );
+    }
+
+    let lastError = null;
+    for (let i = 0; i < Math.min(ranked.length, 6); i++) {
+      const pick = ranked[i];
+      const suffix = i === 0 ? '' : `_${i}`;
+      const tryNames = [
+        `${baseName}${suffix}`,
+        `${baseName}${suffix}_${Date.now().toString(36).slice(-4)}`,
+      ];
+      for (const cloneName of tryNames) {
+        const result = await cloneLibraryPickToPage(pageId, pageToken, pick, cloneName);
+        if (result.tpl) return result.tpl;
+        if (result.error) lastError = result.error;
+      }
+    }
+    if (lastError) throw lastError;
     return null;
   }
 
@@ -799,7 +881,7 @@ const Utility = (function () {
   }
 
   function isSafeLibraryPick(pick) {
-    const body = String(pick?.body || pick?.components?.[0]?.text || '');
+    const body = libraryPickBody(pick);
     const name = String(pick?.name || '').toLowerCase();
     if (hasUnwantedWrapper(body)) return false;
     if (name.includes('account_update') || name.includes('account update')) return false;
@@ -892,7 +974,7 @@ const Utility = (function () {
     for (const raw of candidates) {
       const tpl = await enrichTemplateRecord(pageId, pageToken, raw);
       const body = templateBodyFromApi(tpl);
-      if (!isSendableTemplateBody(body)) continue;
+      if (!isUsableTemplateBody(body)) continue;
       sendable.push(tpl);
     }
     return sendable.sort(
@@ -925,18 +1007,25 @@ const Utility = (function () {
       if (err.code === 4 || err.rateLimited) throw err;
     }
 
-    const def = getTemplateDef(0);
-    const name = `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36).slice(-5)}`;
-    try {
-      const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-      if (created && isSendableTemplateBody(created.body)) {
-        assertSafeTemplate(created);
-        saveCachedTemplateRecord(pageId, created);
-        return created;
+    for (let i = 0; i < TEMPLATE_BODIES.length; i++) {
+      const def = getTemplateDef(i);
+      const names = [
+        ownedTemplateName(pageId, i),
+        `${ownedTemplateName(pageId, i)}_${Date.now().toString(36).slice(-5)}`,
+      ];
+      for (const name of names) {
+        try {
+          const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+          if (created && isUsableTemplateBody(created.body)) {
+            assertSafeTemplate(created);
+            saveCachedTemplateRecord(pageId, created);
+            return created;
+          }
+        } catch (err) {
+          lastError = err;
+          if (err.code === 4 || err.rateLimited) throw err;
+        }
       }
-    } catch (err) {
-      lastError = err;
-      if (err.code === 4 || err.rateLimited) throw err;
     }
 
     throw new Error(

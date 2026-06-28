@@ -461,7 +461,6 @@ const GraphAPI = (function () {
   async function searchUtilityTemplateLibrary(pageToken, query = {}) {
     const res = await pageGet(pageToken, ['message_template_library'], {
       platform: 'messenger',
-      language: 'en',
       limit: 25,
       ...query,
     });
