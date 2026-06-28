@@ -27,10 +27,31 @@ const Utility = (function () {
     },
   ];
 
-  /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
-  const wrapperCleanupDone = new Map();
+  const META_TERMS_HINT =
+    'Meta rule: 24 ghante ke baad sirf approved UTILITY template se message ja sakta hai. ' +
+    'Promotional/sales words avoid karein. App Meta ki official template library use karti hai.';
+
+  function formatUtilityError(err) {
+    const msg = String(err?.message || '').toLowerCase();
+    if (
+      msg.includes('rejected') ||
+      msg.includes('custom template') ||
+      msg.includes('utility template') ||
+      msg.includes('pages_utility_messaging')
+    ) {
+      return (
+        'Meta ne is format ko approve nahi kiya — yeh app ki fault nahi, Meta ki policy hai. ' +
+        META_TERMS_HINT +
+        ' 2–3 min wait karke dubara Send karein.'
+      );
+    }
+    return err?.message || 'Could not send notification.';
+  }
 
   const SAFE_LIBRARY_KEYS = [];
+
+  /** One wrapper cleanup per page per session — avoids spamming Meta DELETE. */
+  const wrapperCleanupDone = new Map();
 
   /** pageId -> template object, or false when lookup failed */
   const templateCache = new Map();
@@ -51,6 +72,65 @@ const Utility = (function () {
 
   function saveCustomTemplatesState(state) {
     localStorage.setItem(FB_CONFIG.storageKeys.utilityTemplates, JSON.stringify(state));
+  }
+
+  function getCachedTemplateName(pageId) {
+    return getCustomTemplatesState()[pageId]?.readyName || null;
+  }
+
+  function saveCachedTemplateRecord(pageId, tpl) {
+    if (!pageId || !tpl?.name) return;
+    const state = getCustomTemplatesState();
+    if (!state[pageId]) state[pageId] = {};
+    state[pageId].readyName = tpl.name;
+    state[pageId].readyBody = tpl.body || '';
+    saveCustomTemplatesState(state);
+  }
+
+  async function loadSendableTemplateRecord(pageId, pageToken, name) {
+    const raw = await fetchTemplateByName(pageId, pageToken, name);
+    if (!raw || !isApprovedStatus(raw.status)) return null;
+    const enriched = await enrichTemplateRecord(pageId, pageToken, raw);
+    const body = templateBodyFromApi(enriched);
+    if (!isSendableTemplateBody(body)) return null;
+    const norm = normalizeFromApi(enriched);
+    assertSafeTemplate(norm);
+    return norm;
+  }
+
+  async function findExistingSendableTemplate(pageId, pageToken) {
+    const cachedName = getCachedTemplateName(pageId);
+    if (cachedName) {
+      try {
+        const cached = await loadSendableTemplateRecord(pageId, pageToken, cachedName);
+        if (cached) return cached;
+      } catch {
+        /* try live list */
+      }
+    }
+
+    const list = await listAllPageTemplates(pageId, pageToken);
+    const candidates = list
+      .filter((t) => isApprovedStatus(t.status) && isAllowedTemplateName(t.name))
+      .sort(
+        (a, b) =>
+          templatePreferScore(b.name, templateBodyFromApi(b)) -
+          templatePreferScore(a.name, templateBodyFromApi(a))
+      );
+
+    for (const raw of candidates.slice(0, 8)) {
+      let body = templateBodyFromApi(raw);
+      let tpl = raw;
+      if (!body || !isSendableTemplateBody(body)) {
+        tpl = await enrichTemplateRecord(pageId, pageToken, raw);
+        body = templateBodyFromApi(tpl);
+      }
+      if (!isSendableTemplateBody(body)) continue;
+      const norm = normalizeFromApi(tpl);
+      assertSafeTemplate(norm);
+      return norm;
+    }
+    return null;
   }
 
   function getTemplateDef(index = 0) {
@@ -495,14 +575,13 @@ const Utility = (function () {
           if (verified) return verified;
         }
         if (result?.status === 'REJECTED') {
-          lastErr = new Error('Meta rejected this custom template format.');
+          return null;
         }
       } catch (err) {
         lastErr = err;
         if (err.code === 4 || err.rateLimited) throw err;
       }
     }
-    if (lastErr) throw lastErr;
     return null;
   }
 
@@ -592,6 +671,7 @@ const Utility = (function () {
       const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
       const btnCount = (pick?.buttons || []).length;
       let score = 200 - staticLen - btnCount * 15;
+      if (body.toLowerCase().startsWith('good news') && !hasUnwantedWrapper(body)) score += 35;
       if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 40;
       if (body === '({{1}})' || body.startsWith('Message:')) score += 20;
       if (score > bestScore) {
@@ -822,51 +902,56 @@ const Utility = (function () {
     );
   }
 
-  async function resolveExactCustomTemplate(pageId, pageToken) {
-    const live = await listLiveSendableTemplates(pageId, pageToken);
-    if (live.length) {
-      const verified = await finalizeTemplateRecord(pageId, pageToken, live[0].name);
-      if (verified) {
-        assertSafeTemplate(verified);
-        return verified;
-      }
+  async function resolveUtilityTemplate(pageId, pageToken, { createIfMissing = true } = {}) {
+    const existing = await findExistingSendableTemplate(pageId, pageToken);
+    if (existing) {
+      saveCachedTemplateRecord(pageId, existing);
+      return existing;
     }
+    if (!createIfMissing) return null;
 
     clearTemplateCache(pageId);
     let lastError = null;
-    for (let bodyIndex = 0; bodyIndex < TEMPLATE_BODIES.length; bodyIndex++) {
-      const def = getTemplateDef(bodyIndex);
-      const names = [
-        ownedTemplateName(pageId, bodyIndex),
-        `${ownedTemplateName(pageId, bodyIndex)}_${Date.now().toString(36).slice(-5)}`,
-      ];
-      for (const name of names) {
-        try {
-          const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-          if (created && isSendableTemplateBody(created.body)) {
-            assertSafeTemplate(created);
-            return created;
-          }
-        } catch (err) {
-          lastError = err;
-          if (err.code === 4 || err.rateLimited) throw err;
-        }
+
+    try {
+      const libraryTpl = await tryMinimalLibraryClone(pageId, pageToken);
+      if (libraryTpl) {
+        assertSafeTemplate(libraryTpl);
+        saveCachedTemplateRecord(pageId, libraryTpl);
+        return libraryTpl;
       }
+    } catch (err) {
+      lastError = err;
+      if (err.code === 4 || err.rateLimited) throw err;
     }
 
-    const libraryTpl = await tryMinimalLibraryClone(pageId, pageToken);
-    if (libraryTpl) {
-      assertSafeTemplate(libraryTpl);
-      return libraryTpl;
+    const def = getTemplateDef(0);
+    const name = `${ownedTemplateName(pageId, 0)}_${Date.now().toString(36).slice(-5)}`;
+    try {
+      const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
+      if (created && isSendableTemplateBody(created.body)) {
+        assertSafeTemplate(created);
+        saveCachedTemplateRecord(pageId, created);
+        return created;
+      }
+    } catch (err) {
+      lastError = err;
+      if (err.code === 4 || err.rateLimited) throw err;
     }
 
     throw new Error(
-      (lastError?.message ||
-        'Meta rejected custom templates. Delete pagechat_lib_post_purchase_* in Business Suite, wait 2 min, open Notifications, retry.') +
-        (lastError?.message?.includes('pages_utility_messaging')
-          ? ' Sign out and sign in again — allow all permissions.'
-          : '')
+      formatUtilityError(
+        lastError ||
+          new Error(
+            'Meta ki approved template library se setup nahi ho saki. ' +
+              'Business Suite → Message templates check karein.'
+          )
+      )
     );
+  }
+
+  async function resolveExactCustomTemplate(pageId, pageToken) {
+    return resolveUtilityTemplate(pageId, pageToken, { createIfMissing: true });
   }
 
   async function getVerifiedUtilityTemplate(page, categoryKey) {
@@ -967,34 +1052,53 @@ const Utility = (function () {
 
     throw (
       lastErr ||
-      new Error(
-        'No exact-message template ({{1}} only). Open Notifications, wait 1–2 min for setup, then retry.'
-      )
+      new Error(formatUtilityError(new Error('Utility template send failed.')))
     );
   }
 
   async function prepare(page) {
     if (!page?.id || !page?.access_token) return;
+
+    const categoryKey = getActiveCategoryKey();
+    if (preparedPageId === page.id && readyTemplates.get('custom')) {
+      showStatus(`Ready — Good news! + your text`, true);
+      updateLivePreview(page, categoryKey);
+      return;
+    }
     if (preparePromise && preparedPageId === page.id) return preparePromise;
 
     preparedPageId = page.id;
+    showStatus('Ready — Good news! + your text', true);
+    updateLivePreview(page, categoryKey);
+
     preparePromise = (async () => {
-      readyTemplates.clear();
-      clearTemplateCache(page.id);
-      showStatus('Preparing notification template (Good news! + your text)…', true, true);
       try {
+        const cachedBody = getCustomTemplatesState()[page.id]?.readyBody;
+        if (cachedBody) {
+          readyTemplates.set('custom', {
+            name: getCachedTemplateName(page.id),
+            body: cachedBody,
+            language: 'en',
+          });
+        }
+
+        const tpl = await resolveUtilityTemplate(page.id, page.access_token, {
+          createIfMissing: false,
+        });
+        if (tpl) {
+          readyTemplates.set('custom', tpl);
+          showStatus(`Ready — Good news! + your text`, true);
+          updateLivePreview(page, categoryKey);
+          return;
+        }
+
         cleanupWrapperTemplatesFromPage(page.id, page.access_token).catch(() => {});
-        const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
-        readyTemplates.set('custom', tpl);
-        showStatus(`Ready — template: ${tpl.name}`, true);
+        showStatus('Ready — Good news! + your text (Send par template setup)', true);
       } catch (err) {
         if (isRateLimitError(err)) {
           showStatus(err.message, false);
         } else {
-          showStatus(
-            'Template will be created when you send. Type your message and tap Send.',
-            true
-          );
+          showStatus('Ready — Good news! + your text', true);
         }
       }
     })();
@@ -1249,6 +1353,7 @@ const Utility = (function () {
     updateTemplateForm,
     refreshPreview,
     ensureTemplateFormValid,
+    formatUtilityError,
     showStatus,
     hideStatus,
     reset,

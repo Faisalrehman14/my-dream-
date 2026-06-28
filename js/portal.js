@@ -647,8 +647,9 @@
       }
       Inbox.refresh?.(activePage, { forceMessages: true });
     } catch (err) {
-      Utility.showStatus(err.message, false);
-      toast(err.message, true);
+      const msg = Utility.formatUtilityError?.(err) || err.message;
+      Utility.showStatus(msg, false);
+      toast(msg, true);
     } finally {
       updateUtilitySendMode();
     }
