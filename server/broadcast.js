@@ -154,7 +154,21 @@ function hasUnwantedWrapper(body) {
 function isExactMessageBody(body) {
   const b = String(body || '').trim();
   if (b === '{{1}}') return true;
-  return /^[\u200B-\u200D\u2060\uFEFF]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF]*$/.test(b);
+  return /^[\u200B-\u200D\u2060\uFEFF\u00A0]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF\u00A0]*$/.test(b);
+}
+
+const SENDABLE_CUSTOM_BODIES = new Set([
+  '({{1}})',
+  'Message:\n{{1}}',
+  'Update:\n{{1}}',
+  'Hello,\n\n{{1}}',
+]);
+
+function isSendableCustomBody(body) {
+  const b = String(body || '').trim();
+  if (!b || hasUnwantedWrapper(b)) return false;
+  if (isExactMessageBody(b)) return true;
+  return SENDABLE_CUSTOM_BODIES.has(b);
 }
 
 async function fetchTemplateByName(pageId, pageToken, name) {
@@ -199,7 +213,7 @@ async function assertExactTemplateForSend(pageId, pageToken, templateName) {
       `Template "${templateName}" has no readable body on Meta. Open Notifications and wait for setup.`
     );
   }
-  if (!isExactMessageBody(body) || hasUnwantedWrapper(body)) {
+  if (!isSendableCustomBody(body) || hasUnwantedWrapper(body)) {
     throw new Error(
       `Blocked wrapper template "${templateName}" (body starts: ${body.slice(0, 48)}…). Cancel this bulk job and start a new send after opening Notifications.`
     );

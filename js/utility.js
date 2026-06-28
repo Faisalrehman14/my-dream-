@@ -1,32 +1,28 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v20';
+  const TEMPLATE_VERSION = 'v21';
 
-  /** Meta rejects {{1}} at start/end — invisible chars wrap the variable; customer sees only {{1}} text. */
-  const EXACT_BODY_INVISIBLE = '\u2060';
-
-  /** User text replaces {{1}} — first option is invisible-wrapped exact message (best for emoji). */
+  /**
+   * Meta requires static text before/after {{1}} — invisible unicode gets rejected.
+   * Bodies ordered by preference: minimal visible wrap first, then short labels.
+   */
   const TEMPLATE_BODIES = [
     {
-      bodyText: `${EXACT_BODY_INVISIBLE}{{1}}${EXACT_BODY_INVISIBLE}`,
-      example: 'Hello, we are here for you.',
-    },
-    {
-      bodyText: `\u200B{{1}}\u200B`,
-      example: 'Hello, we are here for you.',
-    },
-    {
-      bodyText: 'Hello,\n\n{{1}}',
-      example: 'Hello, we are here for you.',
+      bodyText: '({{1}})',
+      example: 'We received your request and will reply shortly.',
     },
     {
       bodyText: 'Message:\n{{1}}',
-      example: 'Hello, we are here for you.',
+      example: 'We received your request and will reply shortly.',
     },
     {
       bodyText: 'Update:\n{{1}}',
-      example: 'Hello, we are here for you.',
+      example: 'We received your request and will reply shortly.',
+    },
+    {
+      bodyText: 'Hello,\n\n{{1}}',
+      example: 'We received your request and will reply shortly.',
     },
   ];
 
@@ -134,7 +130,7 @@ const Utility = (function () {
     const body = templateBodyFromApi(tpl);
     if (
       name.includes(`pagechat_${TEMPLATE_VERSION}_custom_`) &&
-      isExactMessageBody(body)
+      isSendableCustomBody(body)
     ) {
       return false;
     }
@@ -147,18 +143,34 @@ const Utility = (function () {
       return true;
     }
     if (body && hasUnwantedWrapper(body)) return true;
-    if (name.includes('_custom_') && body && !isExactMessageBody(body)) return true;
+    if (name.includes('_custom_') && body && !isSendableCustomBody(body)) return true;
     return false;
   }
 
   function isExactMessageBody(body) {
     const b = String(body || '').trim();
     if (b === '{{1}}') return true;
-    return /^[\u200B-\u200D\u2060\uFEFF]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF]*$/.test(b);
+    return /^[\u200B-\u200D\u2060\uFEFF\u00A0]*\{\{1\}\}[\u200B-\u200D\u2060\uFEFF\u00A0]*$/.test(b);
   }
 
-  function getExactCreateBodyDefs() {
-    return TEMPLATE_BODIES.slice(0, 2);
+  function knownCustomBodyTexts() {
+    return new Set(TEMPLATE_BODIES.map((item) => item.bodyText));
+  }
+
+  function isSendableCustomBody(body) {
+    const b = String(body || '').trim();
+    if (!b || hasUnwantedWrapper(b)) return false;
+    if (isExactMessageBody(b)) return true;
+    return knownCustomBodyTexts().has(b);
+  }
+
+  function bodyPreferScore(body) {
+    const b = String(body || '').trim();
+    if (isExactMessageBody(b)) return 100;
+    if (b === '({{1}})') return 95;
+    if (b === 'Message:\n{{1}}' || b === 'Update:\n{{1}}') return 80;
+    if (b === 'Hello,\n\n{{1}}') return 70;
+    return isSendableCustomBody(b) ? 50 : 0;
   }
 
   async function enrichTemplateRecord(pageId, pageToken, tpl) {
@@ -302,8 +314,8 @@ const Utility = (function () {
     else if (isOwnedCustomTemplate(n)) score = 90;
     else if (n.startsWith('pagechat_')) score = 60;
     const b = String(body || '').trim();
-    if (b === '{{1}}') score += 15;
-    else if (hasUnwantedWrapper(b)) score = 0;
+    score += bodyPreferScore(b);
+    if (hasUnwantedWrapper(b)) score = 0;
     return score;
   }
 
@@ -369,8 +381,8 @@ const Utility = (function () {
     }
     const norm = normalizeFromApi(raw);
     assertSafeTemplate(norm);
-    if (!isExactMessageBody(body)) {
-      const err = new Error('NOT_EXACT_TEMPLATE');
+    if (!isSendableCustomBody(body)) {
+      const err = new Error('NOT_SENDABLE_TEMPLATE');
       err.notExact = true;
       err.templateBody = body;
       throw err;
@@ -423,7 +435,7 @@ const Utility = (function () {
       const fresh = fetched ? await enrichTemplateRecord(pageId, pageToken, fetched) : null;
       if (fresh && isApprovedStatus(fresh.status)) {
         const body = templateBodyFromApi(fresh);
-        if (!body || hasUnwantedWrapper(body) || !isExactMessageBody(body)) {
+        if (!body || hasUnwantedWrapper(body) || !isSendableCustomBody(body)) {
           return null;
         }
         return normalizeFromApi(fresh);
@@ -446,14 +458,10 @@ const Utility = (function () {
       }
       if (existing?.status === 'PENDING') return null;
     }
-    if (existing?.status === 'REJECTED') {
-      const err = new Error(`Template "${name}" was rejected by Meta.`);
-      err.templateRejected = true;
-      throw err;
-    }
+    if (existing?.status === 'REJECTED') return null;
 
     let lastErr = null;
-    for (const lang of ['en_US', 'en']) {
+    for (const lang of ['en', 'en_US']) {
       try {
         const createRes = await GraphAPI.createPageUtilityTemplate(
           pageId,
@@ -721,7 +729,7 @@ const Utility = (function () {
     for (const raw of candidates) {
       const tpl = await enrichTemplateRecord(pageId, pageToken, raw);
       const body = templateBodyFromApi(tpl);
-      if (!isExactMessageBody(body)) continue;
+      if (!isSendableCustomBody(body)) continue;
       if (hasUnwantedWrapper(body)) continue;
       sendable.push(tpl);
     }
@@ -743,35 +751,30 @@ const Utility = (function () {
     }
 
     clearTemplateCache(pageId);
-    const nameSuffixes = [
-      '',
-      `_${Date.now().toString(36).slice(-5)}`,
-      `_${Date.now().toString(36)}`,
-    ];
     let lastError = null;
-    for (const def of getExactCreateBodyDefs()) {
-      for (let s = 0; s < nameSuffixes.length; s++) {
-        const name =
-          s === 0
-            ? ownedTemplateName(pageId, 0)
-            : `${ownedTemplateName(pageId, 0)}${nameSuffixes[s]}`;
+    for (let bodyIndex = 0; bodyIndex < TEMPLATE_BODIES.length; bodyIndex++) {
+      const def = getTemplateDef(bodyIndex);
+      const names = [
+        ownedTemplateName(pageId, bodyIndex),
+        `${ownedTemplateName(pageId, bodyIndex)}_${Date.now().toString(36).slice(-5)}`,
+      ];
+      for (const name of names) {
         try {
           const created = await tryCreateOwnedTemplate(pageId, pageToken, def, name);
-          if (created && isExactMessageBody(created.body)) {
+          if (created && isSendableCustomBody(created.body)) {
             assertSafeTemplate(created);
             return created;
           }
         } catch (err) {
           lastError = err;
           if (err.code === 4 || err.rateLimited) throw err;
-          if (err.templateRejected) continue;
         }
       }
     }
 
     throw new Error(
       (lastError?.message ||
-        'Meta rejected the exact-message template. Wait 1–2 min on Notifications, then retry.') +
+        'Meta rejected all custom utility templates. Wait 2–3 min, open Notifications again, then retry.') +
         (lastError?.message?.includes('pages_utility_messaging')
           ? ' Sign out and sign in again — allow all permissions.'
           : '')
