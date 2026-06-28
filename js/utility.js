@@ -147,6 +147,12 @@ const Utility = (function () {
     );
   }
 
+  function isButtonInputMismatchError(err) {
+    if (err?.subcode === 2388234 || err?.buttonInputMismatch) return true;
+    const msg = String(err?.message || '').toLowerCase();
+    return msg.includes('button input count mismatch') || msg.includes('button input params');
+  }
+
   function rethrowIfRateLimited(err, pageId) {
     if (isRateLimitError(err)) {
       noteRateLimit(pageId);
@@ -752,7 +758,7 @@ const Utility = (function () {
     );
   }
 
-  /** Meta library clone inputs — match Graph API shape (URL needs text + base_url). */
+  /** Meta library clone inputs — one entry per library button (count must match exactly). */
   function libraryButtonInputFor(btn) {
     const type = String(btn.type || '').toUpperCase();
     if (type === 'URL' || type === 'WEB_URL') {
@@ -786,15 +792,17 @@ const Utility = (function () {
   function libraryButtonInputs(pick) {
     const buttons = libraryPickButtons(pick);
     if (!buttons.length) return null;
-    const supported = buttons.filter((btn) => {
-      const type = String(btn.type || '').toUpperCase();
-      return type !== 'FORMS' && type !== 'FLOW';
-    });
-    if (!supported.length) return null;
-    return supported.map(libraryButtonInputFor);
+    return buttons.map(libraryButtonInputFor);
   }
 
-  function buildLibraryClonePayload(cloneName, pick, { includeButtons = true } = {}) {
+  function libraryPickHasUnsupportedButtons(pick) {
+    const buttons = libraryPickButtons(pick);
+    if (!buttons.length) return false;
+    const allowed = new Set(['URL', 'WEB_URL', 'PHONE_NUMBER', 'QUICK_REPLY', 'POSTBACK']);
+    return buttons.some((btn) => !allowed.has(String(btn.type || '').toUpperCase()));
+  }
+
+  function buildLibraryClonePayload(cloneName, pick) {
     const payload = {
       name: cloneName,
       category: 'UTILITY',
@@ -803,10 +811,8 @@ const Utility = (function () {
     };
     const bodyInputs = libraryBodyInputs(pick);
     if (bodyInputs) payload.library_template_body_inputs = bodyInputs;
-    if (includeButtons) {
-      const btnInputs = libraryButtonInputs(pick);
-      if (btnInputs) payload.library_template_button_inputs = btnInputs;
-    }
+    const btnInputs = libraryButtonInputs(pick);
+    if (btnInputs?.length) payload.library_template_button_inputs = btnInputs;
     return payload;
   }
 
@@ -865,6 +871,7 @@ const Utility = (function () {
     if (/order|delivery|shipment|purchase|appointment|account/i.test(name) && !/^good news/i.test(body)) {
       return false;
     }
+    if (libraryPickHasUnsupportedButtons(pick)) return false;
     return true;
   }
 
@@ -874,6 +881,7 @@ const Utility = (function () {
     const staticLen = body.replace(/\{\{\d+\}\}/g, '').trim().length;
     const btnCount = libraryPickButtons(pick).length;
     let score = 220 - staticLen - btnCount * 35;
+    if (btnCount === 0) score += 90;
     if (/^good news!/i.test(body)) score += 55;
     if (body === 'Good news! {{1}}' || body === 'Good news! {{1}}.') score += 45;
     if (body === '({{1}})' || body.startsWith('Message:') || body.startsWith('Update:')) score += 25;
@@ -903,39 +911,26 @@ const Utility = (function () {
     }
 
     let lastError = null;
-    for (let pass = 0; pass < 2; pass++) {
-      const includeButtons = pass === 1;
-      try {
-        await GraphAPI.cloneUtilityLibraryTemplate(
-          pageId,
-          pageToken,
-          buildLibraryClonePayload(cloneName, pick, { includeButtons })
-        );
-        invalidateTemplateListCache(pageId);
-        const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 6);
-        if (approved?.status === 'APPROVED') {
-          const enriched = await enrichTemplateRecord(pageId, pageToken, approved);
-          const norm = normalizeFromApi(enriched);
-          if (isUsableTemplateBody(norm.body)) return { tpl: norm };
-          return { error: new Error('Approved library clone body is not usable.') };
-        }
-        if (approved?.status === 'REJECTED') {
-          lastError = new Error('Meta ne library template reject kar di.');
-          break;
-        }
-      } catch (err) {
-        lastError = err;
-        rethrowIfRateLimited(err, pageId);
-        const msg = String(err?.message || '').toLowerCase();
-        if (
-          !includeButtons &&
-          (msg.includes('button') || msg.includes('body') || isTemplateCreationFailedError(err))
-        ) {
-          continue;
-        }
-        break;
+    try {
+      await GraphAPI.cloneUtilityLibraryTemplate(
+        pageId,
+        pageToken,
+        buildLibraryClonePayload(cloneName, pick)
+      );
+      invalidateTemplateListCache(pageId);
+      const approved = await waitForTemplateApproval(pageId, pageToken, cloneName, 6);
+      if (approved?.status === 'APPROVED') {
+        const enriched = await enrichTemplateRecord(pageId, pageToken, approved);
+        const norm = normalizeFromApi(enriched);
+        if (isUsableTemplateBody(norm.body)) return { tpl: norm };
+        return { error: new Error('Approved library clone body is not usable.') };
       }
-      break;
+      if (approved?.status === 'REJECTED') {
+        return { error: new Error('Meta ne library template reject kar di.') };
+      }
+    } catch (err) {
+      lastError = err;
+      rethrowIfRateLimited(err, pageId);
     }
     return { error: lastError || new Error('Library clone failed.') };
   }
@@ -948,6 +943,9 @@ const Utility = (function () {
       const fallback = libList.filter(isCloneableLibraryPick);
       ranked.push(...fallback.slice(0, 2));
     }
+    const bodyOnly = ranked.filter((pick) => libraryPickButtons(pick).length === 0);
+    const withButtons = ranked.filter((pick) => libraryPickButtons(pick).length > 0);
+    const tryOrder = [...bodyOnly, ...withButtons];
     if (!ranked.length) {
       throw new Error(
         'Meta template library mein koi suitable template nahi mila. Business Suite → Message templates check karein.'
@@ -955,12 +953,15 @@ const Utility = (function () {
     }
 
     let lastError = null;
-    for (let i = 0; i < Math.min(ranked.length, 2); i++) {
-      const pick = ranked[i];
+    for (let i = 0; i < Math.min(tryOrder.length, 3); i++) {
+      const pick = tryOrder[i];
       const cloneName = i === 0 ? baseName : `${baseName}_${i}`;
       const result = await cloneLibraryPickToPage(pageId, pageToken, pick, cloneName);
       if (result.tpl) return result.tpl;
-      if (result.error) lastError = result.error;
+      if (result.error) {
+        lastError = result.error;
+        if (isButtonInputMismatchError(result.error)) continue;
+      }
     }
     if (lastError) throw lastError;
     return null;

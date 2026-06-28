@@ -106,6 +106,9 @@ const GraphAPI = (function () {
     if (e.error_subcode === 2018416 || String(e.error_user_title || '').includes('Template Creation Failed')) {
       err.templateCreationFailed = true;
     }
+    if (e.error_subcode === 2388234 || String(e.error_user_title || '').includes('Button Input Count Mismatch')) {
+      err.buttonInputMismatch = true;
+    }
     if (e.code === 4) err.rateLimited = true;
     if (e.error_subcode === 2069032) {
       err.pageTokenRequired = true;
