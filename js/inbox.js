@@ -17,7 +17,10 @@ const Inbox = (function () {
   let pendingOutgoingEl = null;
   let allSubscribers = [];
   let allSubscribersPageId = null;
+  let allCanReply = [];
+  let allCanReplyPageId = null;
   let loadingAllSubscribers = false;
+  let loadingAllCanReply = false;
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -538,10 +541,30 @@ const Inbox = (function () {
     refresh(page, { forceMessages: true }).catch(() => {});
   }
 
+  function isCanReplyConversation(conv) {
+    return conv?.can_reply === true || conv?.can_reply === 'true';
+  }
+
   function collectUtilityRecipients(convs, pageId) {
     const seen = new Set();
     const list = [];
     convs.forEach((c) => {
+      const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
+      if (!cust?.id || seen.has(cust.id)) return;
+      seen.add(cust.id);
+      list.push({
+        psid: cust.id,
+        name: cust.name || cust.email || cust.id,
+      });
+    });
+    return list;
+  }
+
+  function collectReplyableRecipients(convs, pageId) {
+    const seen = new Set();
+    const list = [];
+    convs.forEach((c) => {
+      if (!isCanReplyConversation(c)) return;
       const cust = GraphAPI.extractCustomerFromConversation(c, pageId);
       if (!cust?.id || seen.has(cust.id)) return;
       seen.add(cust.id);
@@ -574,12 +597,11 @@ const Inbox = (function () {
 
   async function downloadReplyableIdsFile(page, onProgress) {
     if (!page?.id || !page?.access_token) throw new Error('Select a Page first');
-    let recipients = getUtilityRecipients(page.id);
-    if (!recipients.length || allSubscribersPageId !== page.id) {
-      recipients = await loadAllSubscribers(page, onProgress);
-    }
+    const recipients = await loadAllReplyableRecipients(page, onProgress);
     if (!recipients.length) {
-      throw new Error('No customers found. Someone must message your Page first.');
+      throw new Error(
+        'No can-reply customers found. Meta inbox mein jahan reply blocked/done/spam ho, woh list mein nahi aate.'
+      );
     }
     const content = recipients.map((r) => r.psid).join('\n') + '\n';
     const safeName = String(page.name || 'page')
@@ -592,7 +614,10 @@ const Inbox = (function () {
   }
 
   function getReplyableCount(pageId) {
-    return getUtilityRecipients(pageId).length;
+    if (allCanReplyPageId === pageId && allCanReply.length) {
+      return allCanReply.length;
+    }
+    return collectReplyableRecipients(conversations, pageId || activePageId).length;
   }
 
   function getSubscriberCount(pageId) {
@@ -604,7 +629,22 @@ const Inbox = (function () {
   }
 
   async function loadAllReplyableRecipients(page, onProgress) {
-    return loadAllSubscribers(page, onProgress);
+    if (!page?.id || !page?.access_token) return [];
+    if (loadingAllCanReply && allCanReplyPageId === page.id) {
+      return allCanReply.slice();
+    }
+    if (allCanReplyPageId === page.id && allCanReply.length) {
+      return allCanReply.slice();
+    }
+    loadingAllCanReply = true;
+    try {
+      const convs = await GraphAPI.getAllCanReplyConversations(page.id, page.access_token, onProgress);
+      allCanReply = collectReplyableRecipients(convs, page.id);
+      allCanReplyPageId = page.id;
+      return allCanReply.slice();
+    } finally {
+      loadingAllCanReply = false;
+    }
   }
 
   function isLoadingAllSubscribers() {

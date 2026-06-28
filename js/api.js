@@ -327,9 +327,9 @@ const GraphAPI = (function () {
   }
 
   async function getConversations(pageId, pageToken) {
-    const res = await pageGet(pageToken, [pageId, 'conversations'], {
+    const res = await pageGet(pageToken, [pageId, 'conversations', 'inbox'], {
       fields:
-        'id,updated_time,snippet,unread_count,message_count,' +
+        'id,updated_time,snippet,unread_count,message_count,can_reply,' +
         'participants{id,name,picture.type(large)},' +
         'messages.limit(1){id,message,from,created_time,attachments{type,mime_type,name,payload,generic_template{title,subtitle}}}',
       limit: 50,
@@ -338,9 +338,18 @@ const GraphAPI = (function () {
   }
 
   const CONVERSATION_LIST_FIELDS =
-    'id,updated_time,snippet,participants{id,name,picture.type(large)}';
+    'id,updated_time,snippet,can_reply,participants{id,name,picture.type(large)}';
 
   async function getAllConversations(pageId, pageToken, onProgress) {
+    return fetchConversationPages(pageId, pageToken, [pageId, 'conversations'], onProgress);
+  }
+
+  /** Inbox folder only — excludes Done / Spam; include Meta can_reply flag */
+  async function getAllCanReplyConversations(pageId, pageToken, onProgress) {
+    return fetchConversationPages(pageId, pageToken, [pageId, 'conversations', 'inbox'], onProgress);
+  }
+
+  async function fetchConversationPages(pageId, pageToken, pathSegments, onProgress) {
     const all = [];
     let after = null;
     const limit = 100;
@@ -348,7 +357,7 @@ const GraphAPI = (function () {
     while (true) {
       const query = { fields: CONVERSATION_LIST_FIELDS, limit };
       if (after) query.after = after;
-      const res = await pageGet(pageToken, [pageId, 'conversations'], query);
+      const res = await pageGet(pageToken, pathSegments, query);
       const batch = res.data || [];
       all.push(...batch);
       onProgress?.({ loaded: all.length, pageSize: batch.length });
@@ -828,6 +837,7 @@ const GraphAPI = (function () {
     isUserSessionError,
     getConversations,
     getAllConversations,
+    getAllCanReplyConversations,
     startBroadcastCampaign,
     getBroadcastCampaign,
     cancelBroadcastCampaign,

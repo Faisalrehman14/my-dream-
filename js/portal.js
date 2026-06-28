@@ -673,8 +673,8 @@
     }
     const count = Inbox.getReplyableCount?.(activePage.id) || 0;
     el.textContent = count
-      ? `${count} can-reply customer${count === 1 ? '' : 's'} — click to download .txt (one ID per line).`
-      : 'Click Download to load all customer IDs from Messenger inbox.';
+      ? `${count} can-reply customer${count === 1 ? '' : 's'} in inbox — click to download .txt (Meta can_reply only).`
+      : 'Click Download to scan inbox and export only customers you can reply to.';
     if (btn) btn.disabled = false;
   }
 
