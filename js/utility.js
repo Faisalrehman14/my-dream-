@@ -1,7 +1,7 @@
 const Utility = (function () {
   'use strict';
 
-  const TEMPLATE_VERSION = 'v17';
+  const TEMPLATE_VERSION = 'v18';
 
   /** User text replaces {{1}} — first option is exact message only (best for emoji). */
   const TEMPLATE_BODIES = [
@@ -117,8 +117,32 @@ const Utility = (function () {
     return !blocked.some((part) => n.includes(part));
   }
 
+  function isWrapperTemplateRecord(tpl) {
+    const name = String(tpl?.name || '');
+    const body = templateBodyFromApi(tpl);
+    if (name.includes('_lib_') || name.toLowerCase().includes('post_purchase')) return true;
+    if (body && hasUnwantedWrapper(body)) return true;
+    return false;
+  }
+
   function isExactMessageBody(body) {
     return String(body || '').trim() === '{{1}}';
+  }
+
+  async function cleanupWrapperTemplatesFromPage(pageId, pageToken) {
+    const all = await listAllPageTemplates(pageId, pageToken);
+    let removed = 0;
+    for (const tpl of all) {
+      if (!tpl?.id || !isWrapperTemplateRecord(tpl)) continue;
+      try {
+        await GraphAPI.deletePageMessageTemplate(pageToken, tpl.id);
+        removed++;
+      } catch (err) {
+        if (err.code === 4 || err.rateLimited) throw err;
+      }
+    }
+    if (removed) await sleep(1500);
+    return removed;
   }
 
   function assertSafeTemplate(tpl) {
@@ -647,6 +671,8 @@ const Utility = (function () {
   }
 
   async function resolveExactCustomTemplate(pageId, pageToken) {
+    await cleanupWrapperTemplatesFromPage(pageId, pageToken);
+
     const live = await listLiveSendableTemplates(pageId, pageToken);
     if (live.length) {
       const verified = await finalizeTemplateRecord(pageId, pageToken, live[0].name);
@@ -705,16 +731,14 @@ const Utility = (function () {
 
   function isMessagingWindowError(err) {
     const msg = String(err?.message || '').toLowerCase();
-    return (
-      err?.code === 10 ||
-      err?.code === 200 ||
-      err?.code === 551 ||
-      msg.includes('outside') ||
-      msg.includes('24 hour') ||
-      msg.includes('messaging window') ||
-      msg.includes('utility template') ||
-      msg.includes('utility message')
-    );
+    if (err?.code === 551) return true;
+    if (msg.includes('outside') && msg.includes('window')) return true;
+    if (msg.includes('24 hour') || msg.includes('24-hour')) return true;
+    if (msg.includes('messaging window')) return true;
+    if (err?.code === 10 && (msg.includes('outside') || msg.includes('window') || msg.includes('24 hour'))) {
+      return true;
+    }
+    return false;
   }
 
   function isTemplateNotFoundError(err) {
@@ -752,6 +776,8 @@ const Utility = (function () {
     clearTemplateCache(page.id);
     const detail = normalizeOutgoingText(msg);
     let lastErr = null;
+
+    await cleanupWrapperTemplatesFromPage(page.id, page.access_token);
 
     for (let round = 0; round < 2; round++) {
       let candidates = await listLiveSendableTemplates(page.id, page.access_token);
@@ -798,11 +824,13 @@ const Utility = (function () {
     preparePromise = (async () => {
       readyTemplates.clear();
       clearTemplateCache(page.id);
-      showStatus('Preparing Meta utility template (may take 1–2 min)…', true, true);
+      showStatus('Preparing Meta utility template (removing old order wrappers…)…', true, true);
       try {
+        const removed = await cleanupWrapperTemplatesFromPage(page.id, page.access_token);
         const tpl = await getUtilityTemplate(page, getActiveCategoryKey());
         readyTemplates.set('custom', tpl);
-        showStatus(`Ready — exact template: ${tpl.name}`, true);
+        const extra = removed ? ` Removed ${removed} old wrapper template(s).` : '';
+        showStatus(`Ready — exact template: ${tpl.name}.${extra}`, true);
       } catch (err) {
         if (isRateLimitError(err)) {
           showStatus(err.message, false);

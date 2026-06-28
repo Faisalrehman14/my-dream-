@@ -274,16 +274,14 @@ function templateLanguageVariants(lang) {
 
 function isMessagingWindowError(err) {
   const msg = String(err?.message || '').toLowerCase();
-  return (
-    err?.code === 10 ||
-    err?.code === 200 ||
-    err?.code === 551 ||
-    msg.includes('outside') ||
-    msg.includes('24 hour') ||
-    msg.includes('messaging window') ||
-    msg.includes('utility template') ||
-    msg.includes('utility message')
-  );
+  if (err?.code === 551) return true;
+  if (msg.includes('outside') && msg.includes('window')) return true;
+  if (msg.includes('24 hour') || msg.includes('24-hour')) return true;
+  if (msg.includes('messaging window')) return true;
+  if (err?.code === 10 && (msg.includes('outside') || msg.includes('window') || msg.includes('24 hour'))) {
+    return true;
+  }
+  return false;
 }
 
 async function sendOne(job, recipient) {

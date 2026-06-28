@@ -443,13 +443,17 @@ const GraphAPI = (function () {
   async function getPageMessageTemplatesPage(pageId, pageToken, query = {}) {
     return pageGet(pageToken, [pageId, 'message_templates'], {
       limit: 100,
-      fields: 'name,status,language,category,components',
+      fields: 'id,name,status,language,category,components',
       ...query,
     });
   }
 
   async function createPageUtilityTemplate(pageId, pageToken, template) {
     return pagePost(pageToken, [pageId, 'message_templates'], null, template);
+  }
+
+  async function deletePageMessageTemplate(pageToken, templateId) {
+    return pageDeleteReq(pageToken, [templateId], null);
   }
 
   async function searchUtilityTemplateLibrary(pageToken, query = {}) {
@@ -827,6 +831,7 @@ const GraphAPI = (function () {
     getPageMessageTemplates,
     getPageMessageTemplatesPage,
     createPageUtilityTemplate,
+    deletePageMessageTemplate,
     searchUtilityTemplateLibrary,
     cloneUtilityLibraryTemplate,
     sendUtilityTemplateMessage,
